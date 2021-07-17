@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <style>
+            .wrapper { display: flex;
+                flex-wrap: wrap;
+                justify-content: flex-end; }
+
+            .div1 { flex-basis: 25%; }
+            .div2 { flex-basis: 50%; }
+            .div3 { flex-basis: 75%; }
+            .div4 { flex-basis: 100%; }
+
+            h1 {text-align: center;}
+            h2 {text-align: center;}
+    
+        </style>
+    </head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <h1>You are playing "{{song}}" by [{{artist}}] from {{playlist}}</h1>
+    <hr>
+
+    <body>
+        {{ top_rank_table }} 
+        <hr>
+        
+        <h2>Song Features</h2>
+        <div class="wrapper">
+            <div class="div div2">
+                {{ song_features_radar }}
+            </div>
+            <div class="div div2">
+                {{ song_features_percentiles_bar }}
+            </div>
+        </div>
+        <hr>
+        
+        <h2>Song Timelines</h2>
+        <div class="wrapper">
+            <div class="div div2">
+                {{ playlist_date_gantt }}
+            </div>
+            <div class="div div2">
+                {{ playlist_timeline }}
+            </div>
+        </div>
+        <hr>
+
+        <h2>Artist's Most Popular Playlists & Songs</h2>
+        {% for a in artist_top_graphs %}
+            <div class="wrapper">
+                <div class="div div2">
+                    {{ a[0] }}
+                </div>
+                <div class="div div2">
+                    {{ a[1] }}
+                </div>
+            </div>
+        {% endfor %}
+        <hr>
+
+        <h2>Artist Genres</h2>
+
+        {% if artist_genres[1] == False %}
+            <h2> {{ artist }} Genres: {{ artist_genres[0] }} </h2>
+        {% endif %}
+
+        {% if artist_genres[1] == True %}
+            <section>
+                <img src="data:image/png;base64, {{ artist_genres[0] }}" style="max-width: 100%;">
+            </section>
+        {% endif %}
+
+        <div class="wrapper">
+            <div class="div div2">
+                {{ genres_playlist_percentiles }}
+            </div>
+            <div class="div div2">
+                {{ genres_overall_percentiles }}
+            </div>
+        </div>
+
+        <!-- {% for artist in artist_genres %}
+            {{ artist }}
+            <br>
+        {% endfor %} -->
+
+
+
+    </body>
+
+</html>
