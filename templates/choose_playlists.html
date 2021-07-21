@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <style>
+
+            h1 {text-align: center;}
+    
+        </style>
+    </head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    <h1>Get songs that appear in multiple playlists!</h1>
+
+    <body>
+        <form action="/playlist_intersection" method = "POST">
+            <p>Playlists <input type = "text" name = "Playlists" />
+            <input type = "submit" value = "Submit" /></p>
+        </form>
+        
+        <p>Enter the names of at least 2 of the following playlists separated by commas: (capitalization doesn't matter)</p>
+        <p>For example, you may enter: Playlist1, playlist2</p>
+
+        <ul>
+        {% for item in playlists %}
+            <li>{{item}}</li>
+        {% endfor %}
+        </ul>
+
+        <hr>
+
+    </body>
+
+</html>

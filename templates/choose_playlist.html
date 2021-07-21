@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
+        <link rel="stylesheet" href="/static/search.css">
+    </head>
+
+    <body>
+        <h1>Analyze Single Playlist Mode</h1>
+        <br>
+        <h3>Enter the name of one of the following playlists (not-case-sensitive):</h3>
+        
+        <form class="example" method="post" action="/analyze_playlist" 
+            style="margin:auto;max-width:600px">
+            <input type="text" placeholder="Search for one of the playlists below" name="query">
+            <button type="submit"><i class="fa fa-search"></i></button>
+        </form>
+
+        <!-- <p></p>
+        <center>
+        {% for item in search_results %}
+            <tr>
+                <td>{{ item }}</td>
+                </br>
+            </tr>
+        {% endfor %}
+        </center>
+        <hr> -->
+
+        <!-- <form action="/analyze_playlist" method = "POST">
+            <p>Playlist Name <input type = "text" name = "query" /></p>
+            <p><input type = "submit" value = "Submit" /></p>
+        </form> -->
+        
+        <ul>
+        {% for item in playlists %}
+            <li>{{item}}</li>
+        {% endfor %}
+        </ul>
+
+    </body>
+
+</html>
