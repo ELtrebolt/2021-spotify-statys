@@ -9,7 +9,6 @@
 
     <body>
         <h1>Analyze Single Playlist Mode</h1>
-        <br>
         <h3>Enter the name of one of the following playlists (not-case-sensitive):</h3>
         
         <form class="example" method="post" action="/analyze_playlist" 
@@ -17,22 +16,6 @@
             <input type="text" placeholder="Search for one of the playlists below" name="query">
             <button type="submit"><i class="fa fa-search"></i></button>
         </form>
-
-        <!-- <p></p>
-        <center>
-        {% for item in search_results %}
-            <tr>
-                <td>{{ item }}</td>
-                </br>
-            </tr>
-        {% endfor %}
-        </center>
-        <hr> -->
-
-        <!-- <form action="/analyze_playlist" method = "POST">
-            <p>Playlist Name <input type = "text" name = "query" /></p>
-            <p><input type = "submit" value = "Submit" /></p>
-        </form> -->
         
         <ul>
         {% for item in playlists %}
