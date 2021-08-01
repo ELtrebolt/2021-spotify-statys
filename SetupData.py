@@ -28,7 +28,7 @@ class SetupData():
             if playlist['owner']['id'] == self.USER_ID:
                 self.PLAYLIST_DICT[playlist['name']] = playlist['id']
 
-        self.path = f'../data/{self.USER_ID}/'
+        self.path = f'staticfiles/{self.USER_ID}/'
         if not os.path.exists(self.path):
             os.makedirs(self.path)
 
