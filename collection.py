@@ -1,10 +1,13 @@
-import datetime
+from datetime import datetime, timezone
 import pandas as pd
+import sys
+import os
+import time
 
 PERCENTILE_COLS = ['popularity', 'danceability', 'energy', 'loudness', 'speechiness', 
                   'acousticness', 'instrumentalness', 'liveness', 'valence', 'tempo', 'duration']
 
-def _get_100_songs(session, tracks, playlist):
+def _get_100_songs(sp, tracks, playlist):
     
     song_meta={'id':[], 'name':[], 
             'artist':[], 'album':[], 'explicit':[],'popularity':[], 
@@ -13,53 +16,63 @@ def _get_100_songs(session, tracks, playlist):
     i = 1
     for item in tracks['items']:
         meta = item['track']
-        
-        song_meta['id'] += [meta['id']]
 
-        # song name
-        song=meta['name']
-        song_meta['name']+=[song]
+        # For Bernardo and Adam, this was the error - meta was None
+        if meta is not None:
         
-        # artists name
-        artist= ', '.join([singer['name'] for singer in meta['artists']])
-        song_meta['artist'].append(artist)
+            song_meta['id'] += [meta['id']]
 
-        # artists id
-        artist_ids = ', '.join([singer['id'] for singer in meta['artists']])
-        song_meta['artist_ids'].append(artist_ids)
-        
-        # album name
-        album=meta['album']['name']
-        song_meta['album']+=[album]
+            # song name
+            song=meta['name']
+            song_meta['name']+=[song]
+            
+            # artists name
+            artist= ', '.join([singer['name'] for singer in meta['artists']])
+            song_meta['artist'].append(artist)
 
-        # explicit: lyrics could be considered offensive or unsuitable for children
-        explicit=meta['explicit']
-        song_meta['explicit'].append(explicit)
+            # artists id
+            artist_ids = ', '.join([singer['id'] for singer in meta['artists']])
+            song_meta['artist_ids'].append(artist_ids)
+            
+            # album name
+            album=meta['album']['name']
+            song_meta['album']+=[album]
 
-        # song popularity
-        popularity=meta['popularity']
-        song_meta['popularity'].append(popularity)
-        
-        # playlist name
-        song_meta['playlist'].append(playlist)
-        
-        # date added to playlist
-        d1 = datetime.datetime.strptime(item['added_at'], "%Y-%m-%dT%H:%M:%SZ")
-        new_format = "%Y-%m-%d"
-        date_added = d1.strftime(new_format)
-        song_meta['date_added'].append(date_added)
+            # explicit: lyrics could be considered offensive or unsuitable for children
+            explicit=meta['explicit']
+            song_meta['explicit'].append(explicit)
 
-        # artist genres
-        # artist_ids = [a['id'] for a in meta['artists']]
-        # genres = [SPOTIFY.artist(i)['genres'] for i in artist_ids]
-        # song_meta['genres'].append(genres)
-        
-        i += 1
+            # song popularity
+            popularity=meta['popularity']
+            song_meta['popularity'].append(popularity)
+            
+            # playlist name
+            song_meta['playlist'].append(playlist)
+            
+            # date added to playlist
+            d1 = datetime.strptime(item['added_at'],'%Y-%m-%dT%H:%M:%SZ')
+            # for whatever reason converting timezone doesn't show same date added as Spotify
+            # d1 = d1.replace(tzinfo=timezone.utc).astimezone(tz=None)
+
+            # if str(datetime.now().astimezone().date())[5:] in str(d1.date()) or song=='Make You Mine' or 'Keep It Simple' in song or song=='Ceasefire' or song=='Centuries':
+            #     print(song, playlist, d1)
+
+            date_added = d1.strftime('%Y-%m-%d')
+            song_meta['date_added'].append(date_added)
+            
+
+
+            # artist genres
+            # artist_ids = [a['id'] for a in meta['artists']]
+            # genres = [SPOTIFY.artist(i)['genres'] for i in artist_ids]
+            # song_meta['genres'].append(genres)
+            
+            i += 1
         
     song_meta_df=pd.DataFrame.from_dict(song_meta)
     
     # check the song feature
-    features = session['SPOTIFY'].audio_features(song_meta['id'])
+    features = sp.audio_features(song_meta['id'])
     # change dictionary to dataframe
     features_df=pd.DataFrame.from_dict(features)
 
@@ -74,53 +87,68 @@ def _get_100_songs(session, tracks, playlist):
     
     return final_df
 
-def _get_playlist(session, name, _id):
-    SPOTIFY = session['SPOTIFY']
+def get_playlist(sp, name, _id):
     df = pd.DataFrame()
 
-    results = SPOTIFY.playlist(_id)
+    results = sp.playlist(_id, fields='tracks,next')
     tracks = results['tracks']
-    df = pd.concat([df, _get_100_songs(session, tracks, name)])
+    df = pd.concat([df, _get_100_songs(sp, tracks, name)])
     
     while tracks['next']:
-        tracks = SPOTIFY.next(tracks)
-        df = pd.concat([df, _get_100_songs(session, tracks, name)])
+        tracks = sp.next(tracks)
+        df = pd.concat([df, _get_100_songs(sp, tracks, name)])
         
     return df.reset_index()
 
-def setup_data(session):
-    SPOTIFY = session['SPOTIFY']
-
-    PLAYLISTS = SPOTIFY.current_user_playlists()
-    USER_ID = SPOTIFY.me()['id']
-
+def get_playlist_dict(PLAYLISTS, USER_ID):
     PLAYLIST_DICT = {}
     for playlist in PLAYLISTS['items']:
         if playlist['owner']['id'] == USER_ID:
             PLAYLIST_DICT[playlist['name']] = playlist['id']
 
-    ALL_SONGS_DF = pd.DataFrame()
-    for name, _id in PLAYLIST_DICT.items():
-        df = _get_playlist(session, name, _id)
-        ALL_SONGS_DF = pd.concat([ALL_SONGS_DF, df])
-    ALL_SONGS_DF.drop(columns='index',inplace=True)
+    return PLAYLIST_DICT
 
+def get_all_songs_df(sp, PLAYLIST_DICT):
+    #start_time = time.time()
+    ALL_SONGS_DF = pd.DataFrame()
+    count = 1
+    total = len(PLAYLIST_DICT)
+    for name, _id in list(PLAYLIST_DICT.items()):
+        #end_time = time.time()
+        #if end_time - start_time > 25:       #10=23 secs, 15=25 secs, 20=23 secs, 25=24 secs & good
+            #break
+        df = _get_playlist(sp, name, _id)
+        ALL_SONGS_DF = pd.concat([ALL_SONGS_DF, df])
+        yield name + ' ' + str(count) + ' / ' + str(total) + '<br>\n' 
+        count += 1
+    ALL_SONGS_DF.drop(columns='index',inplace=True)
+    
+    yield ALL_SONGS_DF
+
+def get_unique_songs_df(ALL_SONGS_DF):
     # Changing cols will be condensed into a list = ex: unique song will have a col "playlist" = [playlist1, playlist2]
-    changing_cols = ['playlist', 'date_added']
+    changing_cols = ['id', 'playlist', 'date_added']
     UNIQUE_SONGS_DF = ALL_SONGS_DF.groupby([i for i in ALL_SONGS_DF.columns if i not in changing_cols], as_index=False)\
-        [['playlist', 'date_added']].agg(lambda x: list(x))
+                                            [changing_cols].agg(lambda x: list(x))
+    UNIQUE_SONGS_DF.drop_duplicates(subset=['name', 'artist'], inplace=True)
+
     for col in PERCENTILE_COLS:
         sz = UNIQUE_SONGS_DF[col].size-1
         UNIQUE_SONGS_DF[col + '_percentile'] = UNIQUE_SONGS_DF[col].rank(method='max').apply(lambda x: 100.0*(x-1)/sz)
 
-    #SONGS_TIMELINE_DF = ALL_SONGS_DF[['name', 'playlist', 'date_added', 'artist']].groupby(['date_added'], as_index=False)\
-    #    [['name', 'playlist', 'artist']].agg(lambda x: list(x))
+    UNIQUE_SONGS_DF['num_playlists'] = [len(i) for i in UNIQUE_SONGS_DF['playlist']]
 
-    TOP_ARTISTS_SHORT = [i['name'] for i in SPOTIFY.current_user_top_artists(time_range='short_term', limit = 50)['items']]
-    TOP_ARTISTS_MED = [i['name'] for i in SPOTIFY.current_user_top_artists(time_range='medium_term', limit = 50)['items']]
-    TOP_ARTISTS_LONG = [i['name'] for i in SPOTIFY.current_user_top_artists(time_range='long_term', limit = 50)['items']]
+    return UNIQUE_SONGS_DF
+
+def get_top_artists(spotify):
+    TOP_ARTISTS_SHORT = [i['name'] for i in spotify.current_user_top_artists(time_range='short_term', limit = 50)['items']]
+    TOP_ARTISTS_MED = [i['name'] for i in spotify.current_user_top_artists(time_range='medium_term', limit = 50)['items']]
+    TOP_ARTISTS_LONG = [i['name'] for i in spotify.current_user_top_artists(time_range='long_term', limit = 50)['items']]
     TOP_ARTISTS = [TOP_ARTISTS_SHORT, TOP_ARTISTS_MED, TOP_ARTISTS_LONG]
 
+    return TOP_ARTISTS
+
+def add_top_artists_rank(UNIQUE_SONGS_DF, TOP_ARTISTS):
     for top_list, col_name in zip(TOP_ARTISTS, ['artists_short_rank', 'artists_med_rank', 'artists_long_rank']):
         new_list = []
         for i in UNIQUE_SONGS_DF['artist']:
@@ -135,26 +163,29 @@ def setup_data(session):
             else:
                 rank = 'N/A'
             new_list.append(rank)
-        UNIQUE_SONGS_DF.insert(len(UNIQUE_SONGS_DF.columns), col_name, new_list, True)
+        UNIQUE_SONGS_DF[col_name] = new_list
 
-    TOP_SONGS_SHORT = {i['name']:(', '.join([j['name'] for j in i['artists']]), k+1) for k, i in enumerate(SPOTIFY.current_user_top_tracks(time_range='short_term', limit=50)['items'])}
-    TOP_SONGS_MED = {i['name']:(', '.join([j['name'] for j in i['artists']]), k+1) for k, i in enumerate(SPOTIFY.current_user_top_tracks(time_range='medium_term', limit=50)['items'])}
-    TOP_SONGS_LONG = {i['name']:(', '.join([j['name'] for j in i['artists']]), k+1) for k, i in enumerate(SPOTIFY.current_user_top_tracks(time_range='long_term', limit=50)['items'])}
+def get_top_songs(spotify):
+    TOP_SONGS_SHORT = {i['name']:(', '.join([j['name'] for j in i['artists']]), k+1) for k, i in enumerate(spotify.current_user_top_tracks(time_range='short_term', limit=50)['items'])}
+    TOP_SONGS_MED = {i['name']:(', '.join([j['name'] for j in i['artists']]), k+1) for k, i in enumerate(spotify.current_user_top_tracks(time_range='medium_term', limit=50)['items'])}
+    TOP_SONGS_LONG = {i['name']:(', '.join([j['name'] for j in i['artists']]), k+1) for k, i in enumerate(spotify.current_user_top_tracks(time_range='long_term', limit=50)['items'])}
     TOP_SONGS = [TOP_SONGS_SHORT, TOP_SONGS_MED, TOP_SONGS_LONG]
 
+    return TOP_SONGS
+
+def add_top_songs_rank(UNIQUE_SONGS_DF, TOP_SONGS):
     for top_dict, col_name in zip(TOP_SONGS, ['songs_short_rank', 'songs_med_rank', 'songs_long_rank']):
         new_list = []
         for i in UNIQUE_SONGS_DF.index:
-            song = UNIQUE_SONGS_DF['name'][i]
-            if song in top_dict.keys() and UNIQUE_SONGS_DF['artist'][i] == top_dict[song][0]:
+            song = UNIQUE_SONGS_DF.loc[i, 'name']
+            if song in top_dict.keys() and UNIQUE_SONGS_DF.loc[i, 'artist'] == top_dict[song][0]:
                 rank = top_dict[song][1]
             else:
                 rank = 'N/A'
             new_list.append(rank)
-        UNIQUE_SONGS_DF.insert(len(UNIQUE_SONGS_DF.columns), col_name, new_list, True)
+        UNIQUE_SONGS_DF[col_name] = new_list
 
-    UNIQUE_SONGS_DF['num_playlists'] = [len(i) for i in UNIQUE_SONGS_DF['playlist']]
-
+def add_genres(sp, ALL_SONGS_DF, UNIQUE_SONGS_DF):
     # Get Genres for Each Song By Artist Genres - Takes 2 minutes for 1000 unique artists
     unique_artist_ids = set()
     for i in UNIQUE_SONGS_DF['artist_ids']:
@@ -167,7 +198,7 @@ def setup_data(session):
     
     # Getting 50 artists at a time is a LOT faster than getting 1 artist at a time
     for i in range(0, total, 40):
-        listy = session['SP'].artists(unique_artist_ids[i:i+40])
+        listy = sp.artists(unique_artist_ids[i:i+40])
         for a in listy['artists']:
             try:
                 g = a['genres']
@@ -187,10 +218,38 @@ def setup_data(session):
             genres_list.append(song_genres)
         df['genres']=genres_list
 
-    session['PLAYLISTS'] = PLAYLISTS
-    session['USER_ID'] = USER_ID
-    session['PLAYLIST_DICT'] = PLAYLIST_DICT
-    session['ALL_SONGS_DF'] = ALL_SONGS_DF
-    session['UNIQUE_SONGS_DF'] = UNIQUE_SONGS_DF
-    session['TOP_ARTISTS'] = TOP_ARTISTS
-    session['TOP_SONGS'] = TOP_SONGS      
+# def setup_data(session):
+#     spotify = session['SPOTIFY']
+#     sp = session['SP']
+
+#     PLAYLISTS = spotify.current_user_playlists()
+#     USER_ID = spotify.me()['id']
+    
+#     PLAYLIST_DICT = _get_playlist_dict(spotify, sp, PLAYLISTS, USER_ID)
+
+#     ALL_SONGS_DF = _get_all_songs_df(spotify, sp, PLAYLIST_DICT)
+
+#     UNIQUE_SONGS_DF = _get_unique_songs_df(ALL_SONGS_DF)
+
+#     #SONGS_TIMELINE_DF = ALL_SONGS_DF[['name', 'playlist', 'date_added', 'artist']].groupby(['date_added'], as_index=False)\
+#     #    [['name', 'playlist', 'artist']].agg(lambda x: list(x))
+
+#     TOP_ARTISTS = _get_top_artists(spotify)
+#     TOP_SONGS = _get_top_songs(spotify)
+
+#     _add_top_artists_rank(spotify, UNIQUE_SONGS_DF, TOP_ARTISTS)
+#     _add_top_songs_rank(spotify, UNIQUE_SONGS_DF, TOP_SONGS)
+
+#     _add_genres(sp, ALL_SONGS_DF, UNIQUE_SONGS_DF)
+
+#     session['USER_ID'] = USER_ID
+#     session['PLAYLIST_DICT'] = PLAYLIST_DICT
+#     session['ALL_SONGS_DF'] = ALL_SONGS_DF.to_dict('list')
+#     session['UNIQUE_SONGS_DF'] = UNIQUE_SONGS_DF.to_dict('list')
+#     session['TOP_ARTISTS'] = TOP_ARTISTS
+#     session['TOP_SONGS'] = TOP_SONGS     
+
+#     session['SETUP_DATA'] = True
+
+#     # return [USER_ID, PLAYLIST_DICT, ALL_SONGS_DF.to_dict('list'), UNIQUE_SONGS_DF.to_dict('list'),
+#     #         TOP_ARTISTS, TOP_SONGS]

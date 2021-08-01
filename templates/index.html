@@ -12,30 +12,36 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 
-<h1>Hi {{name}}!   <small><a href="/sign_out">[sign out]</a></small></h1>
-<br>
+<body>
 
-<a href="/current_user">about me</a> |
+    <h1>Hi {{name}}!   <small><a href="/sign_out">[sign out]</a></small></h1>
+    <br>
 
-<a href="/currently_playing">currently playing</a> |
+    <a href="/about_me">about me</a> |
 
-<a href="/choose_playlists">playlist intersection</a> |
+    <a href="/currently_playing">currently playing</a> |
 
-<a href="/choose_playlist">analyze playlist</a>
-<br>
+    <a href="/choose_playlists">compare playlists</a> |
 
-<h2>On This Date {{today}}:</h2>
-{{ on_this_date }}
-{{ full_timeline }}
-<hr>
+    <a href="/choose_playlist">analyze playlist</a> |
 
-<h2>Your Most Recent Activity:</h2>
-<h3>{{ last_added_playlist[0] }} days ago, you added {{ last_added_playlist[2] }} songs to {{ last_added_playlist[3] }} playlists</h3>
-{{ last_added_playlist[1] }}
-<hr>
+    <a href="/top_50">top 50</a>
+    <br>
 
-<h2>My Library Totals:</h2>
-<h3>Across {{ overall_data[2] }} playlists, I've added {{ overall_data[0] }} songs</h3>
-<h3>My playlists have {{ overall_data[1] }} unique songs, {{ overall_data[4] }} unique albums, and {{ overall_data[3] }} unique artists</h3>
+    <h2>On This Date {{today}}:</h2>
+    {{ on_this_date }}
+    {{ full_timeline }}
+    <hr>
+
+    <h2>Your Most Recent Activity:</h2>
+    <h3>{{ last_added_playlist[0] }} days ago, you added {{ last_added_playlist[2] }} songs to {{ last_added_playlist[3] }} playlists</h3>
+    {{ last_added_playlist[1] }}
+    <hr>
+
+    <h2>My Library Totals:</h2>
+    <h3>Across {{ overall_data[2] }} playlists, I've added {{ overall_data[0] }} songs</h3>
+    <h3>My playlists have {{ overall_data[1] }} unique songs, {{ overall_data[4] }} unique albums, and {{ overall_data[3] }} unique artists</h3>
+
+</body>
 
 </html>
