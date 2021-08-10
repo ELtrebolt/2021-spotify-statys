@@ -2,7 +2,10 @@ from datetime import datetime
 import pandas as pd
 import pickle
 import os
+from visualization import HomePage, AboutPage, Top50Page
 
+# Test Local = http://127.0.0.1:5000/
+# Run Heroku = https://spotify-statys.herokuapp.com/
 REDIRECT_URI = 'https://spotify-statys.herokuapp.com/'
 PERCENTILE_COLS = ['popularity', 'danceability', 'energy', 'loudness', 'speechiness', 
                   'acousticness', 'instrumentalness', 'liveness', 'valence', 'tempo', 'duration']
@@ -11,7 +14,7 @@ def _dump(path, obj):
         with open(path, 'wb') as f:   # Pickling
             pickle.dump(obj, f)
 
-def _read(path):
+def _load(path):
     with open(path, 'rb') as f: # Unpickling
         return pickle.load(f)
 
@@ -28,7 +31,7 @@ class SetupData():
             if playlist['owner']['id'] == self.USER_ID:
                 self.PLAYLIST_DICT[playlist['name']] = playlist['id']
 
-        self.path = f'staticfiles/{self.USER_ID}/'
+        self.path = f'.data/{self.USER_ID}/'
         if not os.path.exists(self.path):
             os.makedirs(self.path)
 
@@ -129,29 +132,36 @@ class SetupData():
         return df.reset_index()
 
     def setup_1(self):
-        #start_time = time.time()
-        count = 1
-        total = len(self.PLAYLIST_DICT)
-        yield '<h1>Collecting Your Playlists</h1>'
+        try:
+            #start_time = time.time()
+            count = 1
+            total = len(self.PLAYLIST_DICT)
+            yield '<h1>Collecting Your Playlists</h1>'
 
-        ALL_SONGS_DF = pd.DataFrame()
-        for name, _id in list(self.PLAYLIST_DICT.items()):
-            #end_time = time.time()
-            #if end_time - start_time > 25:       #10=23 secs, 15=25 secs, 20=23 secs, 25=24 secs & good
-                #break
-            df = self._get_playlist(name, _id)
-            ALL_SONGS_DF = pd.concat([ALL_SONGS_DF, df])
-            yield name + '   ' + str(count) + '/' + str(total) + '<br/>\n' 
-            count += 1
-        ALL_SONGS_DF.drop(columns='index',inplace=True)
-        ALL_SONGS_DF.to_pickle(f"{self.path}all_songs_df.pkl")
+            ALL_SONGS_DF = pd.DataFrame()
+            for name, _id in list(self.PLAYLIST_DICT.items()):
+                #end_time = time.time()
+                #if end_time - start_time > 25:       #10=23 secs, 15=25 secs, 20=23 secs, 25=24 secs & good
+                    #break
+                df = self._get_playlist(name, _id)
+                ALL_SONGS_DF = pd.concat([ALL_SONGS_DF, df])
+                yield name + '   ' + str(count) + '/' + str(total) + '<br/>\n' 
+                count += 1
+            
+            # Yung Yi had the problem of 'index' not found in axis
+            if 'index' in ALL_SONGS_DF.columns:
+                ALL_SONGS_DF.drop(columns='index',inplace=True)
+            ALL_SONGS_DF.to_pickle(f"{self.path}all_songs_df.pkl")
+            
+            status = {'SETUP1':True, 'SETUP2':False, 'SETUP3':False}
+            _dump(f'{self.path}collection.pkl', status)
 
-        status = {'SETUP1':True, 'SETUP2':False, 'SETUP3':False}
-        _dump(f'{self.path}collection.pkl', status)
-
-        yield '<script>window.location.href="' + REDIRECT_URI + '"</script>'
-        #yield '{{ url_for('index') }}'
-        #yield '<br>\nDone! Please Refresh The Page'
+            yield '<script>window.location.href="' + REDIRECT_URI + '"</script>'
+            #yield '{{ url_for('index') }}'
+            #yield '<br>\nDone! Please Refresh The Page'
+        except Exception as e:
+            function = 'Setup1'
+            yield '<script>window.location.href="' + REDIRECT_URI + 'retry/' + function + '/' + str(e) + '";</script>'
 
     def _get_unique_songs_df(self):
         # Changing cols will be condensed into a list = ex: unique song will have a col "playlist" = [playlist1, playlist2]
@@ -181,7 +191,7 @@ class SetupData():
 
     def _add_top_artists_rank(self):
         UNIQUE_SONGS_DF = pd.read_pickle(f'{self.path}unique_songs_df.pkl')
-        TOP_ARTISTS = _read(f'{self.path}top_artists.pkl')
+        TOP_ARTISTS = _load(f'{self.path}top_artists.pkl')
 
         for top_list, col_name in zip(TOP_ARTISTS, ['artists_short_rank', 'artists_med_rank', 'artists_long_rank']):
             new_list = []
@@ -210,7 +220,7 @@ class SetupData():
 
     def _add_top_songs_rank(self):
         UNIQUE_SONGS_DF = pd.read_pickle(f'{self.path}unique_songs_df.pkl')
-        TOP_SONGS = _read(f'{self.path}top_songs.pkl')
+        TOP_SONGS = _load(f'{self.path}top_songs.pkl')
 
         for top_dict, col_name in zip(TOP_SONGS, ['songs_short_rank', 'songs_med_rank', 'songs_long_rank']):
             new_list = []
@@ -263,27 +273,49 @@ class SetupData():
         ALL_SONGS_DF.to_pickle(f"{self.path}all_songs_df.pkl")
         UNIQUE_SONGS_DF.to_pickle(f"{self.path}unique_songs_df.pkl")
 
-    def setup_2(self):
-        yield '<h1>Grouping Your Data</h1>'
+    def setup_2(self, ALL_SONGS_DF):
+        try:
+            yield '<h1>Grouping Your Data</h1>'
 
-        yield 'Getting Unique Songs...1/6<br>\n'
-        self._get_unique_songs_df()
+            yield 'Getting Unique Songs...1/10<br>\n'
+            self._get_unique_songs_df()
 
-        yield 'Getting Top Artists...2/6<br>\n'
-        self._get_top_artists()
+            yield 'Getting Top Artists...2/10<br>\n'
+            self._get_top_artists()
 
-        yield 'Getting Top Songs...3/6<br>\n'
-        self._get_top_songs()
+            yield 'Getting Top Songs...3/10<br>\n'
+            self._get_top_songs()
 
-        yield 'Adding Top Artists Rank...4/6<br>\n'
-        self._add_top_artists_rank()
+            yield 'Adding Top Artists Rank...4/10<br>\n'
+            self._add_top_artists_rank()
 
-        yield 'Adding Top Songs Rank...5/6<br>\n'
-        self._add_top_songs_rank()
+            yield 'Adding Top Songs Rank...5/10<br>\n'
+            self._add_top_songs_rank()
 
-        yield 'Getting Artist Genres...6/6<br>\n'
-        self._add_genres()
+            yield 'Getting Artist Genres...6/10<br>\n'
+            self._add_genres()
 
-        status = {'SETUP1':True, 'SETUP2':True, 'SETUP3':False}
-        _dump(f'{self.path}collection.pkl', status)
-        yield '<script>window.location.href="' + REDIRECT_URI + '"</script>'
+            yield 'Setting Up Home Page...7/10<br>\n'
+            UNIQUE_SONGS_DF = pd.read_pickle(f'{self.path}unique_songs_df.pkl')
+            home_page = HomePage(self.path, ALL_SONGS_DF, UNIQUE_SONGS_DF)
+            _dump(f'{self.path}home_page.pkl', home_page)
+
+            yield 'Setting Up About Me Page...8/10<br>\n'
+            artists = self.SPOTIFY.current_user_followed_artists()['artists']['items']
+            top_artists = _load(f'{self.path}top_artists.pkl')
+            top_songs = _load(f'{self.path}top_songs.pkl')
+            about_page = AboutPage(self.path, ALL_SONGS_DF, UNIQUE_SONGS_DF, artists, top_artists, top_songs)
+            _dump(f'{self.path}about_page.pkl', about_page)
+
+            yield 'Setting up Top50 Page...9/10<br>\n'
+            top50_page = Top50Page(self.path, UNIQUE_SONGS_DF, top_songs, top_artists)
+            _dump(f'{self.path}top50_page.pkl', top50_page)
+
+            yield 'Finalizing Data Collection...10/10'
+            status = {'SETUP1':True, 'SETUP2':True, 'SETUP3':False}
+            _dump(f'{self.path}collection.pkl', status)
+
+            yield '<script>window.location.href="' + REDIRECT_URI + '"</script>'
+        except Exception as e:
+            function = 'Setup2'
+            yield '<script>window.location.href="' + REDIRECT_URI + 'retry/' + function + '/' + str(e) + '";</script>'

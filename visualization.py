@@ -1,4 +1,4 @@
-# Imports --------------------------------------------------------------------------------------------------
+# Imports --------------------------------------------------------------------
 import os
 import tempfile
 temp_dir = tempfile.TemporaryDirectory()
@@ -9,6 +9,7 @@ import plotly
 import plotly.graph_objs as go
 import plotly.express as px
 import plotly.figure_factory as ff
+from plotly import subplots
 
 # Venn Diagrams
 from io import BytesIO
@@ -24,20 +25,24 @@ from flask import Markup
 import pandas as pd
 import datetime
 from collections import defaultdict
+import pickle
 
-# Constants ------------------------------------------------------------------------------------------------
+# Constants -------------------------------------------------------------------
 
-PERCENTILE_COLS = ['popularity', 'danceability', 'energy', 'loudness', 'speechiness', 
-                  'acousticness', 'instrumentalness', 'liveness', 'valence', 'tempo', 'duration']
+PERCENTILE_COLS = ['popularity', 'danceability', 'energy', 'loudness', 
+                    'speechiness', 'acousticness', 'instrumentalness', 
+                    'liveness', 'valence', 'tempo', 'duration']
 FEATURE_COLS = ['popularity', 'danceability', 'energy', 'speechiness', 'acousticness', 
                 'instrumentalness', 'liveness', 'valence']
 OTHER_COLS = ['loudness', 'tempo', 'duration']
 LABEL_CUTOFF_LENGTH = 25
-TIME_RANGE_DICT = {0: ['Short Term', 'short_rank'], 1: ['Medium Term', 'med_rank'], 2:['Long Term', 'long_rank']}
+TIME_RANGE_DICT = {0: ['Last 4 Weeks', 'short_rank'], 1: ['Last 6 Months', 'med_rank'], 2:['All Time', 'long_rank']}
+COLORS = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A', '#19D3F3', '#FF6692', '#B6E880', '#FF97FF', '#FECB52']
 
 # Helper Functions -----------------------------------------------------------------------------------------
 
-def _h_bar(series, title, xaxis, yaxis=None, percents=False, long_names=False, hovertext=None):
+def _h_bar(series, title=None, xaxis=None, yaxis=None, percents=False, 
+            long_names=False, hovertext=None, to_html=True, name=None, color=None, markup=True):
     if percents:
         texty = [str(round(i, 2)) + '%' for i in series]
     else:
@@ -48,40 +53,89 @@ def _h_bar(series, title, xaxis, yaxis=None, percents=False, long_names=False, h
     else:
         y_labels = series.keys()
     
-    fig = go.Figure(go.Bar(
-                    x=series,
-                    y=y_labels,
-                    orientation='h',
-                    text=texty, 
-                    textposition='auto',
-                    hovertext=hovertext
-                    ))
+    #df = pd.DataFrame({'label':y_labels, 'value':series})
+    fig = go.Bar(
+                x=series,
+                y=y_labels,
+                orientation='h',
+                text=texty, 
+                textposition='auto',
+                hovertext=hovertext,
+                name=name,
+                marker_color=color
+                )
 
-    fig.update_layout(title_text=title, xaxis_title=xaxis, yaxis={'categoryorder':'total ascending'})
-    fig.update_yaxes(automargin=True)
+    if to_html:
+        fig = go.Figure(fig)
 
-    if yaxis:
-        fig.update_layout(yaxis_title=yaxis)
+        if title:
+            fig.update_layout(title_text=title)
+        if xaxis:
+            fig.update_layout(xaxis_title=xaxis)
+        if yaxis:
+            fig.update_layout(yaxis_title=yaxis)
+        
+        fig.update_layout(yaxis={'categoryorder':'total ascending'})
+        fig.update_yaxes(automargin=True)
 
-    return Markup(fig.to_html(full_html=False))
+        if markup:
+            return Markup(fig.to_html(full_html=False))
+        else:
+            return fig
+    else:
+        return fig
 
-def _boxplot(x_data, y_data, title, text, xaxis, yaxis):
-    fig = go.Figure()
+def _boxplot(x_data, y_data, text, title=None, xaxis=None, yaxis=None, to_html=True, name=None, color=None, markup=True):
+    if to_html:
+        fig = go.Figure()
 
-    for xd, yd in zip(x_data, y_data):
-        fig.add_trace(go.Box(
-            y=yd,
-            name=xd,
-            boxpoints='all',
-            text=text
+        i=0
+        for xd, yd in zip(x_data, y_data):
+
+            fig.add_trace(go.Box(
+                y=yd,
+                name=xd,
+                boxpoints='all',
+                text=text,
+                marker_color=COLORS[i]
+                )
             )
-        )
-    fig.update_layout(title=title, xaxis_title=xaxis, yaxis_title=yaxis)
+            i+=1
 
-    return Markup(fig.to_html(full_html=False))
+        if title:
+            fig.update_layout(title_text=title)
+        if xaxis:
+            fig.update_layout(xaxis_title=xaxis)
+        if yaxis:
+            fig.update_layout(yaxis_title=yaxis)
+
+        if markup:
+            return Markup(fig.to_html(full_html=False))
+        else:
+            return fig
+    else:
+        length = len(y_data[0])
+        box = go.Box(
+                    y=[j for i in y_data for j in i],
+                    x=[k for j in [[i]*length for i in x_data] for k in j],
+                    name=name,
+                    boxpoints='all',
+                    hovertext=text*len(FEATURE_COLS),
+                    marker_color=color,
+                    offsetgroup=name
+                    )
+        return box
 
 def _get_top_n_from_dict(dicty, reverse=False, top_n=10):
     return {k:dicty[k] for k in sorted(dicty.items(), key = lambda x: x[1], reverse=reverse)[:top_n]}
+
+def _dump(path, obj):
+        with open(path, 'wb') as f:   # Pickling
+            pickle.dump(obj, f)
+
+def _load(path):
+    with open(path, 'rb') as f: # Unpickling
+        return pickle.load(f)
 
 # Shared Functions -----------------------------------------------------------------------------------------
 
@@ -165,8 +219,8 @@ class CurrentlyPlayingPage():
         self._artist = artist
         self._playlist = playlist
         
-        self._unique_songs_df = pd.DataFrame(unique_songs_df)
         self._all_songs_df = pd.DataFrame(all_songs_df)
+        self._unique_songs_df = pd.DataFrame(unique_songs_df)
 
         song_df = self._unique_songs_df[self._unique_songs_df['artist']==artist]
         song_df = song_df[song_df['name']==song]
@@ -191,9 +245,9 @@ class CurrentlyPlayingPage():
             # columnwidth = [80,400],
             header = dict(
                 values = [['<b>Top 50 Rank</b>'],
-                            ['<b>Short Term</b>'],
-                            ['<b>Medium Term</b>'],
-                            ['<b>Long Term</b>']],
+                            ['<b>Last 4 Weeks</b>'],
+                            ['<b>Last 6 Months</b>'],
+                            ['<b>All Time</b>']],
                 line_color='darkslategray',
                 fill_color='royalblue',
                 # align=['left','center'],
@@ -509,14 +563,34 @@ class CurrentlyPlayingPage():
 # Timeline Home Page ----------------------------------------------------------------------------------------------
 
 class HomePage():
-    def __init__(self, all_songs_df, unique_songs_df):
+    def __init__(self, path, all_songs_df, unique_songs_df):
         # self._today = datetime.datetime.now().astimezone()
         self._today = datetime.datetime.now().astimezone()
-
+        self._path = path
         self._all_songs_df = pd.DataFrame(all_songs_df)
         self._unique_songs_df = pd.DataFrame(unique_songs_df)
 
-    def graph_on_this_date(self):
+        self._graph_on_this_date()
+        self._graph_count_timeline()
+        self._graph_last_added()
+        self._get_library_totals()
+
+    def load_on_this_date(self):
+        try:
+            return _load(f'{self._path}home_on_this_date.pkl')
+        except FileNotFoundError:
+            return 'No recorded data of adding songs to a playlist on this date'
+
+    def load_timeline(self):
+        return _load(f'{self._path}home_timeline.pkl')
+
+    def load_last_added(self):
+        return _load(f'{self._path}home_last_added.pkl')
+
+    def load_totals(self):
+        return _load(f'{self._path}home_totals.pkl')
+
+    def _graph_on_this_date(self):
         ALL_SONGS_DF = self._all_songs_df
         today = str(self._today.date())[5:]
         df = ALL_SONGS_DF[ALL_SONGS_DF['date_added'].apply(lambda x: today in x)]
@@ -545,16 +619,17 @@ class HomePage():
                 )
                 ])
 
-        return Markup(fig.to_html(full_html=False))
+        _dump(f'{self._path}home_on_this_date.pkl', Markup(fig.to_html(full_html=False)))
 
-    def graph_count_timeline(self):
-        return common_graph_count_timeline(self._all_songs_df, continuous=False)
+    def _graph_count_timeline(self):
+        count_timeline = common_graph_count_timeline(self._all_songs_df, continuous=False)
+        _dump(f'{self._path}home_timeline.pkl', count_timeline)
 
-    def graph_last_added(self):
+    def _graph_last_added(self):
         ALL_SONGS_DF = self._all_songs_df
         df = ALL_SONGS_DF.sort_values(by='date_added',ascending=False)
         last_date = df['date_added'].to_list()[0]
-        distance = (self._today.date() - datetime.date(*map(int, last_date.split('-')))).days
+        distance = (self._today.date() - datetime.date(*map(int, last_date.split('-')))).days+1
 
         df = ALL_SONGS_DF[ALL_SONGS_DF['date_added']==last_date]
         num_songs = len(df.index)
@@ -578,21 +653,24 @@ class HomePage():
                 )
                 ])
 
-        return [distance, Markup(fig.to_html(full_html=False)), num_songs, len(df['playlist'])]
+        final = [distance, Markup(fig.to_html(full_html=False)), num_songs, len(df['playlist'])]
+        _dump(f'{self._path}home_last_added.pkl', final)
 
-    def get_library_totals(self):
+    def _get_library_totals(self):
         ALL_SONGS_DF = self._all_songs_df
         UNIQUE_SONGS_DF = self._unique_songs_df
 
         overall_data = [len(ALL_SONGS_DF.index), len(UNIQUE_SONGS_DF), 
                         len(ALL_SONGS_DF['playlist'].unique()), len(UNIQUE_SONGS_DF['artist'].unique()),
                         len(UNIQUE_SONGS_DF['album'].unique())]
-        return overall_data
+        
+        _dump(f'{self._path}home_totals.pkl', overall_data)
 
 # Overall Stats = About Me Page ----------------------------------------------------------------------------------------------
 
-class OverallPage():
-    def __init__(self, all_songs_df, unique_songs_df, artists, top_artists, top_songs):
+class AboutPage():
+    def __init__(self, path, all_songs_df, unique_songs_df, artists, top_artists, top_songs):
+        self._path = path
         self._all_songs_df = pd.DataFrame(all_songs_df)
         self._unique_songs_df = pd.DataFrame(unique_songs_df)
 
@@ -600,7 +678,32 @@ class OverallPage():
         self._top_artists = top_artists
         self._top_songs = top_songs
 
-    def graph_top_genres_by_followed_artists(self):
+        self._graph_top_genres_by_followed_artists()
+        self._graph_top_playlists_by_top_50()
+        self._graph_top_playlists_by_top_50(artists=10)
+        self._graph_top_songs_by_num_playlists()
+        self._graph_top_artists_and_albums_by_num_playlists()
+        self._graph_top_artists_and_albums_by_num_playlists(albums=True)
+
+    def load_followed_artists(self):
+        return _load(f'{self._path}about_followed_artists.pkl')
+
+    def load_playlists_by_artists(self):
+        return _load(f'{self._path}about_playlists_by_artists.pkl')
+
+    def load_playlists_by_songs(self):
+        return _load(f'{self._path}about_playlists_by_songs.pkl')
+
+    def load_top_songs(self):
+        return _load(f'{self._path}about_overall_songs.pkl')
+
+    def load_top_artists(self):
+        return _load(f'{self._path}about_overall_artists.pkl')
+
+    def load_top_albums(self):
+        return _load(f'{self._path}about_overall_albums.pkl')
+
+    def _graph_top_genres_by_followed_artists(self):
         d = defaultdict(int)
         d2 = defaultdict(list)
         
@@ -613,10 +716,11 @@ class OverallPage():
         data = {i[0]:i[1] for i in sorted(d.items(), key = lambda x: x[1], reverse=True)[:top_n][::-1]}
         
         series = pd.Series(data)
-        return _h_bar(series, title='Top Genres by Followed Artists', xaxis='# of Followed Artists',
+        final = _h_bar(series, title='Top Genres by Followed Artists', xaxis='# of Followed Artists',
                         hovertext=[', '.join(d2[i]) for i in data.keys()], yaxis='Genre', long_names=True)
+        _dump(f'{self._path}about_followed_artists.pkl', final)
 
-    def graph_top_playlists_by_top_50(self, artists=False):
+    def _graph_top_playlists_by_top_50(self, artists=False):
         ALL_SONGS_DF = self._all_songs_df
 
         final = []
@@ -664,30 +768,35 @@ class OverallPage():
             title = 'Top Playlists by Number of Top 50 Songs In Them'
         fig.update_layout(title_text=title)
     
-        return Markup(fig.to_html(full_html=False))
+        if artists:
+            _dump(f'{self._path}about_playlists_by_artists.pkl', Markup(fig.to_html(full_html=False)))
+        else:
+            _dump(f'{self._path}about_playlists_by_songs.pkl', Markup(fig.to_html(full_html=False)))
 
-    def graph_top_songs_by_num_playlists(self, top_n):
+    def _graph_top_songs_by_num_playlists(self, top_n=10):
     
         df = self._unique_songs_df.sort_values(by='num_playlists', ascending=False)
         df = df.head(top_n)
 
         series = pd.Series(dict(zip(df['name'], df['num_playlists'])))
-        title = 'Top ' + str(top_n) + ' Songs Across ' + str(len(self._all_songs_df['playlist'].unique())) + ' Playlists'
+        title = 'Top ' + str(top_n) + ' Most Common Songs Across ' + str(len(self._all_songs_df['playlist'].unique())) + ' Playlists'
         
-        return _h_bar(series, title=title, xaxis='Number of Playlists Song is In', yaxis='Song',
+        final = _h_bar(series, title=title, xaxis='Number of Playlists Song is In', yaxis='Song',
                         long_names=True, hovertext = [', '.join(i) for i in df['playlist']])
 
-    def graph_top_artists_and_albums_by_num_playlists(self, top_n, albums=False):
+        _dump(f'{self._path}about_overall_songs.pkl', final)
+
+    def _graph_top_artists_and_albums_by_num_playlists(self, top_n=10, albums=False):
         ALL_SONGS_DF = self._all_songs_df
         dicty = dict()
         if albums:
-            title = 'Top ' + str(top_n) + ' Albums Across ' + str(len(ALL_SONGS_DF['playlist'].unique())) + ' Playlists'
+            title = 'Top ' + str(top_n) + ' Most Common Albums Across ' + str(len(ALL_SONGS_DF['playlist'].unique())) + ' Playlists'
             yaxis = 'Album Name'
             for a in ALL_SONGS_DF['album'].unique():
                 a_df = ALL_SONGS_DF[ALL_SONGS_DF['album'] == a]
                 dicty[a] = len(a_df.index)
         else:
-            title = 'Top ' + str(top_n) + ' Artists Across ' + str(len(ALL_SONGS_DF['playlist'].unique())) + ' Playlists'
+            title = 'Top ' + str(top_n) + ' Most Common Artists Across ' + str(len(ALL_SONGS_DF['playlist'].unique())) + ' Playlists'
             yaxis = 'Artist Name'
             for a in ALL_SONGS_DF['artist'].unique():
                 mask = ALL_SONGS_DF['artist'].apply(lambda x: a in x)
@@ -700,8 +809,13 @@ class OverallPage():
         xaxis = 'Number of Album Songs in All Playlists' if albums else 'Number of Artist Songs in All Playlists'
         yaxis = 'Album' if albums else 'Artist'
 
-        return _h_bar(series, title=title, xaxis=xaxis, yaxis=yaxis,
+        final = _h_bar(series, title=title, xaxis=xaxis, yaxis=yaxis,
                         long_names=True, hovertext=list(series.keys()))
+
+        if albums:
+            _dump(f'{self._path}about_overall_albums.pkl', final)
+        else:
+            _dump(f'{self._path}about_overall_artists.pkl', final)
 
 # Analyze Multiple Playlists Page ----------------------------------------------------------------------------------------------
 class ComparePlaylistsPage():
@@ -787,7 +901,7 @@ class AnalyzePlaylistPage():
         genres = {k:str(v) for k,v in sorted(genres.items(), key = lambda x: x[1], reverse=True)}
         
         series = pd.Series(relative)
-        title = 'Most Popular Genres For Playlist: ' + self._playlist
+        title = 'Most Common Genres For Playlist: ' + self._playlist
         return _h_bar(series, title=title, xaxis = '% of Songs', yaxis='Artist Genre', percents=True,
                         hovertext=[genres[i] + ' Songs' for i in relative])
 
@@ -803,7 +917,7 @@ class AnalyzePlaylistPage():
         relative = {k:str(round(v/total*100, 2)) for k, v in dicty.items()}
         dicty = {k:v for k,v in sorted(dicty.items(), key = lambda x: x[1], reverse=True)[:10]}
 
-        title = 'Most Popular Artists For Playlist: ' + self._playlist
+        title = 'Most Common Artists For Playlist: ' + self._playlist
 
         series = pd.Series(dicty)
         return _h_bar(series, title=title, yaxis='Artist', xaxis='Number of Songs', long_names=True, 
@@ -820,7 +934,7 @@ class AnalyzePlaylistPage():
         relative = {k:str(round(v/total*100, 2)) for k, v in dicty.items()}
         dicty = {k:v for k,v in sorted(dicty.items(), key = lambda x: x[1], reverse=True)[:10]}
 
-        title = 'Most Popular Albums For Playlist: ' + self._playlist
+        title = 'Most Common Albums For Playlist: ' + self._playlist
 
         series = pd.Series(dicty)
         return _h_bar(series, title=title, yaxis='Album', xaxis='Number of Songs', long_names=True, 
@@ -860,16 +974,22 @@ class AnalyzePlaylistPage():
         text = [n + '<br>' + a for n,a in zip(df['name'], df['artist'])]
         xaxis = 'Song Feature'
         yaxis = 'Level (Low -> High)'
-        return _boxplot(x_data, y_data, title, text, xaxis, yaxis)
+        return _boxplot(x_data, y_data, text, title, xaxis, yaxis)
 
 # Top 50 Page ----------------------------------------------------------------------------------------------
 class Top50Page():
-    def __init__(self, unique_songs_df, top_songs, top_artists):
+    def __init__(self, path, unique_songs_df, top_songs, top_artists):
+        self._path = path
         self._top_songs = top_songs
         self._top_artists = top_artists
         self._unique_songs_df = pd.DataFrame(unique_songs_df)
 
-    def _graph_song_features_boxplot(self, time_range):
+        self.graph_all_by_time_range()
+
+    def load_dynamic_graph(self):
+        return _load(f'{self._path}top50_graph.pkl')
+
+    def _graph_song_features_boxplot(self, time_range, name=None, color=None):
         x_data = FEATURE_COLS
         y_data = []
 
@@ -880,16 +1000,18 @@ class Top50Page():
         df['popularity'] = df['popularity']/100
         y_data = [df[col] for col in FEATURE_COLS if col]
 
-        title = 'Top 50 ' + TIME_RANGE_DICT[time_range][0] + ' Songs Audio Features'
+        title = 'Top 50 Songs (' + TIME_RANGE_DICT[time_range][0] + ') Audio Features'
         text = [n + '<br>' + a + '<br>Rank: ' + str(r) for n,a,r in zip(df['name'], df['artist'], df[rank_col])]
         xaxis = 'Song Feature'
         yaxis = 'Level (Low -> High)'
-        return _boxplot(x_data, y_data, title, text, xaxis, yaxis)
 
-    def graph_song_features_boxplots(self):
-        return [self._graph_song_features_boxplot(i) for i in [0, 1, 2]]
+        #name = 'Top 50 Songs'
+        if name and color:
+            return _boxplot(x_data, y_data, text, title, xaxis, yaxis, to_html=False, name=name, color=color)
+        else:
+            return _boxplot(x_data, y_data, text, title, xaxis, yaxis, markup=False, name=TIME_RANGE_DICT[time_range][0])
 
-    def _graph_artist_features_boxplot(self, time_range):
+    def _graph_artist_features_boxplot(self, time_range, name=None, color=None):
         x_data = FEATURE_COLS
         y_data = []
 
@@ -908,44 +1030,156 @@ class Top50Page():
                 
         y_data = list(dicty.values())
 
-        title = 'Top 50 ' + TIME_RANGE_DICT[time_range][0] + ' Artists AVG Audio Features'
+        title = 'Top 50 Artists (' + TIME_RANGE_DICT[time_range][0] + ') AVG Audio Features'
         text = [a + '<br>Rank: ' + str(i) for i,a in enumerate(artists, 1)]
         xaxis = 'Song Feature'
         yaxis = 'Level (Low -> High)'
-        return _boxplot(x_data, y_data, title, text, xaxis, yaxis)
+        
+        #name = 'Top 50 Artists AVG Songs'
+        if name and color:
+            return _boxplot(x_data, y_data, text, title, xaxis, yaxis, to_html=False, name=name, color=color)
+        else:
+            return _boxplot(x_data, y_data, text, title, xaxis, yaxis, markup=False, name=TIME_RANGE_DICT[time_range][0])
 
-    def graph_artist_features_boxplots(self):
-        return [self._graph_artist_features_boxplot(i) for i in [0, 1, 2]]
+    def _graph_top_genres_and_top_songs_or_artists_by_genres(self, time_range, artists=False, name=None, color=None):
+        rank_col = 'artists_' if artists else 'songs_'
+        rank_col += TIME_RANGE_DICT[time_range][1]
 
-    def _graph_top_genres_and_songs_by_genres(self, time_range):
-        UNIQUE_SONGS_DF = self._unique_songs_df
-
-        rank_col = 'songs_' + TIME_RANGE_DICT[time_range][1]
-        mask = self._unique_songs_df[rank_col].apply(lambda x: type(x) == int)
+        mask = self._unique_songs_df[rank_col].apply(lambda x: len(str(x)) == 1 or len(str(x)) == 2)
         df = self._unique_songs_df[mask]
 
-        num_songs_by_genre = dict()
-        top_songs_by_genre = dict()
+        num_by_genre = dict()
+        top_by_genre = dict()
         unique_genres = {k for i in df['genres'] for j in i for k in j}
         for g in unique_genres:
             mask = df['genres'].apply(lambda x: g in {z for y in x for z in y})
             df2 = df[mask]
 
-            num_songs_by_genre[g] = len(df2.index)
+            if artists:
+                df2.drop_duplicates(subset=['artist'], inplace=True)
+                df2[rank_col] = df2[rank_col].astype(int)
+
+            num_by_genre[g] = len(df2.index)
 
             df2 = df2.sort_values(by=rank_col)
             df2 = df2.head()
-            top_songs_by_genre[g] = list(zip(df2['name'], df2[rank_col]))
+            if artists:
+                top_by_genre[g] = list(zip(df2['artist'], df2[rank_col]))
+            else:
+                top_by_genre[g] = list(zip(df2['name'], df2[rank_col]))
 
-        total = len(df.index)   # total should be 50
-        relative = {k:v/total*100 for k, v in sorted(num_songs_by_genre.items(), key = lambda x: x[1], reverse=True)[:10]}
-        counts = {k:str(v) for k,v in sorted(num_songs_by_genre.items(), key = lambda x: x[1], reverse=True)}
+        total = len(df[rank_col].unique())   # total should be 50
+        relative = {k:v/total*100 for k, v in sorted(num_by_genre.items(), key = lambda x: x[1], reverse=True)[:10]}
+        counts = {k:str(v) for k,v in sorted(num_by_genre.items(), key = lambda x: x[1], reverse=True)}
         
         series = pd.Series(relative)
-        title = 'Top 10 Genres & Top 5 Songs Per Genre By ' + TIME_RANGE_DICT[time_range][0] + ' Songs'
+        series.sort_values(inplace=True)
 
-        return _h_bar(series, title=title, xaxis = '% of Top 50 Songs', yaxis='Genre', percents=True,
-                        hovertext=[counts[i] + ' Songs<br><br>(Song, Rank)<br>' + '<br>'.join([str(j) for j in top_songs_by_genre[i]]) for i in relative])
+        #name = 'Top 10 Artist Genres' if artists else 'Top 10 Song Genres'
+        if artists:
+            hovertext=[counts[i] + ' Artists<br><br>(Artist, Rank)<br>' + '<br>'.join([str(j) for j in top_by_genre[i]]) for i in series.keys()]
+        else:
+            hovertext=[counts[i] + ' Songs<br><br>(Song, Rank)<br>' + '<br>'.join([str(j) for j in top_by_genre[i]]) for i in series.keys()]
 
-    def graph_top_genres_and_songs_by_genres(self):
-        return [self._graph_top_genres_and_songs_by_genres(i) for i in [0, 1, 2]]
+        if name and color:
+            return _h_bar(series, percents=True, hovertext=hovertext, to_html=False, name=name, color=color)
+        else:
+            return _h_bar(series, percents=True, hovertext=hovertext, markup=False, name=TIME_RANGE_DICT[time_range][0])
+    
+    def graph_all_by_time_range(self):
+        labels = [i[0] for i in TIME_RANGE_DICT.values()]
+        fig = subplots.make_subplots(rows=4, cols = 1, vertical_spacing=.05,
+                                    subplot_titles=('<b>Top 50 Songs\' Features</b>', '<b>Top 50 Artists\' AVG Song Features</b>', 
+                                                    '<b>Top 10 Song Genres & Top 5 Songs Per Genre</b>', '<b>Top 10 Artist Genres & Top 5 Artists Per Genre</b>'))
+
+        # Multi-colors for 1 Time Range = Short, Med, Long
+        for i in [0, 1, 2]:
+            song_features = self._graph_song_features_boxplot(i)
+            fig.add_traces(song_features.data, 1, 1)
+
+            artist_features = self._graph_artist_features_boxplot(i)
+            fig.add_traces(artist_features.data, 2, 1)
+
+            genres_by_songs = self._graph_top_genres_and_top_songs_or_artists_by_genres(i)
+            fig.add_traces(genres_by_songs.data, 3, 1)
+
+            genres_by_artists = self._graph_top_genres_and_top_songs_or_artists_by_genres(i, artists=True)
+            fig.add_traces(genres_by_artists.data, 4, 1)
+
+        # Same-colors for all Time Ranges
+        for i in [0, 1, 2]:
+            song_features = self._graph_song_features_boxplot(i, name=labels[i], color=COLORS[i])
+            fig.add_trace(song_features, 1, 1)
+
+            artist_features = self._graph_artist_features_boxplot(i, name=labels[i], color=COLORS[i])
+            fig.add_trace(artist_features, 2, 1)
+
+            genres_by_songs = self._graph_top_genres_and_top_songs_or_artists_by_genres(i, name=labels[i], color=COLORS[i])
+            fig.add_trace(genres_by_songs, 3, 1)
+
+            genres_by_artists = self._graph_top_genres_and_top_songs_or_artists_by_genres(i, artists=True, name=labels[i], color=COLORS[i])
+            fig.add_trace(genres_by_artists, 4, 1)
+
+        # Create buttons for drop down menu
+        buttons = []
+        for i, label in enumerate(labels):
+            visibility = [i==j for j in range(len(labels))]
+            visibility = [k for j in [[i]*18 for i in visibility] for k in j] + [False]*12
+            button = dict(
+                        method='update',
+                        label=label,
+                        args=[{'visible':visibility}, 
+                              {'boxmode':'overlay', 'showlegend':False}]
+                        )
+            buttons.append(button)
+
+        allButton = dict(
+                        method='update',
+                        label='All',
+                        args=[{'visible':[False]*54+[True]*12}, 
+                              {'boxmode':'group', 'showlegend':True}]
+                        )
+        buttons += [allButton]
+
+        updatemenus = list([
+                            dict(type='buttons',
+                                direction='right',
+                                active=-1,
+                                x=.5,
+                                pad={"r": 10, "t": 10},
+                                y=1.065,
+                                buttons=buttons,
+                                showactive=True,
+                                ),
+                            ])
+
+        # hoverlabel_font_color='white'
+        fig.update_layout(height=2000, updatemenus=updatemenus, showlegend=False, 
+                            annotations=[
+                                        dict(text="Time Period",
+                                                x=.3, 
+                                                xref="paper",
+                                                y=1.045,
+                                                align="left",
+                                                showarrow=False)
+                                        ]
+                          )
+        #fig.update_traces(marker=dict(color="RoyalBlue"), selector=dict(type='bar'))
+        # Colors from https://plotly.com/python/discrete-color/#color-sequences-in-plotly-express
+        # fig.update_traces(marker=dict(color='#1F77B4'), row=1)
+        # fig.update_traces(marker=dict(color='#D62728'), row=2)
+        # fig.update_traces(marker=dict(color='#2CA02C'), row=3)
+        # fig.update_traces(marker=dict(color='#9467BD'), row=4)
+
+        # edit axis labels
+        fig['layout']['xaxis']['title']='Audio Features'
+        fig['layout']['xaxis2']['title']='Audio Features'
+        fig['layout']['xaxis3']['title']='% of Top 50 Songs'
+        fig['layout']['xaxis4']['title']='% of Top 50 Artists'
+
+        fig['layout']['yaxis']['title']='Level (Low-High)'
+        fig['layout']['yaxis2']['title']='Level (Low-High)'
+        fig['layout']['yaxis3']['title']='Song Genre'
+        fig['layout']['yaxis4']['title']='Artist Genre'
+
+        _dump(f'{self._path}top50_graph.pkl', Markup(fig.to_html(full_html=False)))

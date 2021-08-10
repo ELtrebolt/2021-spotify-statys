@@ -22,22 +22,8 @@
     <h1>Analysis of Top 50 Songs / Artists</h1>
 
     <body>
-        <h2>Song Audio Features</h2>
-        {% for item in song_boxplots %}
-            {{ item }}
-        {% endfor %}
-        <hr>
-
-        <h2>Artist AVG Audio Features</h2>
-        {% for item in artist_boxplots %}
-            {{ item }}
-        {% endfor %}
-        <hr>
-
-        <h2>Top Genres</h2>
-        {% for item in genres_bars %}
-            {{ item }}
-        {% endfor %}
+        <h2>Filter by time period, then hover over graphs to see specific songs, artists, and their rank in your Top 50!</h2>
+        {{ plots_by_time_range }}
     </body>
 
 </html>
