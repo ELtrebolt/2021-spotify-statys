@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+    <head>
+        <style>
+            .wrapper { display: flex;
+                flex-wrap: wrap;
+                justify-content: flex-end; }
+
+            .div1 { flex-basis: 25%; }
+            .div2 { flex-basis: 50%; }
+            .div3 { flex-basis: 75%; }
+            .div4 { flex-basis: 100%; }
+
+            h1 {text-align: center;}
+            h2 {text-align: center;}
+    
+        </style>
+    </head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+
+    <body>
+        <h2>Top Genres</h2>
+        {{ top_genres_by_followed_artists_bar }}
+        <hr>
+
+        <h2>Top Playlists</h2>
+        <div class="wrapper">
+            <div class="div div2">
+                {{ top_playlists_by_songs_bubble }}
+            </div>
+            <div class="div div2">
+                {{ top_playlists_by_artists_bubble }}
+            </div>
+        </div>
+        <hr>
+        
+        <h2>Top Songs / Albums / Artists by Count in All Playlists</h2>
+        {{ top_songs_by_num_playlists }}
+
+        {{ top_artists_by_all_playlists }}
+
+        {{ top_albums_by_all_playlists }}
+
+        <hr>
+
+    </body>
+
+</html>
