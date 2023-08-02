@@ -98,6 +98,5 @@
     - git push heroku master
     - heroku open
 
-
 ## Known Bugs
 1. Top 50 %s may not be even if the API grabs less than the Top 50 songs (for example it has only grabbed 29 songs)
