@@ -93,6 +93,10 @@
     - Delete .data and .flask_session folders if cannot sign out
 4. Uploading to Heroku
     - Change REDIRECT_URI in app.py and SetupData.py to Heroku URL
+    - heroku login
+    - heroku git:remote -a spotify-statys
+    - git push heroku master
+    - heroku open
 
 
 ## Known Bugs
