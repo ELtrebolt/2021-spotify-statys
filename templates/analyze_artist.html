@@ -10,7 +10,7 @@
             .div2 { flex-basis: 50%; }
             .div3 { flex-basis: 75%; }
             .div4 { flex-basis: 100%; }
-            
+
             h1 {text-align: center;}
             h2 {text-align: center;}
     
@@ -19,30 +19,37 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 
-    <h1>Compare Playlists: {{ playlists }} </h1>
+    <h1>Analysis of Artist: {{ artist_name }}</h1>
 
     <body>
-        <h2>Playlist Intersection</h2>
-        <b>There are {{ length }} songs that appear in the following playlists: {{ playlists }}</b>
-        {% if length > 0 %}
-            <ul>
-            {% for item in df %}
-                <li>{{item}}</li>
-            {% endfor %}
-            </ul>
-        {% endif %}
+        <h2>Artist Timeline</h2>
+        {{timeline}}
         <hr>
 
-        <h2>Playlist Timelines</h2>
+        <h2>Top 50 Rankings</h2>
+        {{top_rank_table}}
+        <hr>
+
+        <h2>Most Common Playlists & Songs</h2>
         <div class="wrapper">
             <div class="div div2">
-                {{ playlist_timelines }}
+                {{ top_playlists }}
             </div>
             <div class="div div2">
-                {{ playlist_timelines_continuous }}
+                {{ top_songs }}
             </div>
         </div>
         <hr>
+
+        <h2>Audio Features</h2>
+        {{ features_boxplot }}
+        <hr>
+
+        <h2>Playlists With Artist's Genres</h2>
+        <h2>{{ artist_genres }}</h2>
+        {{ playlists_genres }}
+        <hr>
+        
     </body>
 
 </html>

@@ -14,22 +14,26 @@
 
 <body>
 
-    <h1>Hi {{name}}!   <small><a href="/sign_out">[sign out]</a></small></h1>
+    <h1>Hi {{name}}!   <small><a href="/sign-out">[sign out]</a></small></h1>
     <br>
 
-    <a href="/about_me">about me</a> |
+    <a href="/about-me">about me</a> |
 
-    <a href="/currently_playing">currently playing</a> |
+    <a href="/currently-playing">currently playing</a> |
 
-    <a href="/choose_playlists">compare playlists</a> |
+    <a href="/top-50">top 50</a> |
 
-    <a href="/choose_playlist">analyze playlist</a> |
-
-    <a href="/top_50">top 50</a>
+    <a href="/search">search</a>
     <br>
 
     <h2>On This Date {{today}}:</h2>
     {{ on_this_date }}
+    <ul>
+        {% for item in first_times %}
+            <li>{{item}}</li>
+        {% endfor %}
+    </ul>        
+
     {{ full_timeline }}
     <hr>
 

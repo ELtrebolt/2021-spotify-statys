@@ -10,7 +10,7 @@
             .div2 { flex-basis: 50%; }
             .div3 { flex-basis: 75%; }
             .div4 { flex-basis: 100%; }
-
+            
             h1 {text-align: center;}
             h2 {text-align: center;}
     
@@ -19,33 +19,24 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 
-    <h1>Analysis of Playlist: {{ playlist_name }}</h1>
+    <h1>Compare Playlists: {{ playlists }} </h1>
+    <hr>
 
     <body>
-        <h2>Playlist Timeline</h2>
-        {{ timeline }}
+        <h2>Playlist Intersection</h2>
+        <h3>There are {{ length }} songs that intersect these playlists</h3>
+        {% if length > 0 %}
+            {{ boxplot }}
+        {% endif %}
         <hr>
 
-        <h2>Playlist Genres</h2>
+        <h2>Playlist Timelines</h2>
+        {{ playlist_timelines }}
+        <hr>
+
+        <h2>Playlists' Genres</h2>
         {{ genres }}
         <hr>
-
-        <h2>Top Artists / Albums</h2>
-        <div class="wrapper">
-            <div class="div div2">
-                {{ top_artists }}
-            </div>
-            <div class="div div2">
-                {{ top_albums }}
-            </div>
-        </div>
-        <hr>
-
-        <h2>Audio Features</h2>
-        {{ features_boxplot }}
-        <hr>
-
-        {{ similar_playlists }}
     </body>
 
 </html>

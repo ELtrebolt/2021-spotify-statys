@@ -8,20 +8,19 @@
     </head>
 
     <body>
-        <h1>Analyze Single Playlist Mode</h1>
-        <h3>Enter the name of one of the following playlists (not-case-sensitive):</h3>
+        <h1>Analyze by Search Mode</h1>
+        <h3>Enter any number of your own playlists or any number of artists to compare!</h3>
         
-        <form class="example" method="post" action="/analyze_playlist" 
+        <form class="example" method="post" action="/analyze-search" 
             style="margin:auto;max-width:600px">
-            <input type="text" placeholder="Search for one of the playlists below" name="query">
+            <input type="text" placeholder="Enter names of playlists or artists" name="query">
             <button type="submit"><i class="fa fa-search"></i></button>
         </form>
-        
-        <ul>
-        {% for item in playlists %}
-            <li>{{item}}</li>
-        {% endfor %}
-        </ul>
+
+        <h4>Analyze Playlist: 'Rap'</h4>
+        <h4>Compare Playlists: 'Rap, Casual, Chill'</h4>
+        <h4>Analyze Artist: 'AJR'</h4>
+        <h4>Compare Artists: 'AJR, American Authors, All Time Low'</h4>
 
     </body>
 
