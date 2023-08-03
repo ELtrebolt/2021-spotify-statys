@@ -5,6 +5,7 @@ __pycache__/
 
 .data
 .flask_session
+.sp_caches
 .spotify_caches
 .vscode
 .env

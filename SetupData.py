@@ -110,6 +110,8 @@ class SetupData():
 
                 i += 1
 
+        if not song_meta:
+            print(song_meta, tracks, playlist)
         song_meta_df = pd.DataFrame.from_dict(song_meta)
 
         features = self.SP.audio_features(song_meta['id'])
@@ -168,7 +170,7 @@ class SetupData():
 
             yield 'data:REDIRECT_URI=' + REDIRECT_URI + '\n\n'
         except Exception as e:
-            yield 'data:ERROR=' + traceback.format_exc() + '\n\n'
+            yield 'data:ERROR=' + traceback.format_exc().replace('\n', '<br>') + '\n\n'
 
 
     def _get_unique_songs_df(self):
@@ -349,4 +351,4 @@ class SetupData():
 
             yield 'data:REDIRECT_URI=' + REDIRECT_URI + '\n\n'
         except Exception as e:
-            yield 'data:ERROR=' + traceback.format_exc() + '\n\n'
+            yield 'data:ERROR=' + traceback.format_exc().replace('\n', '<br>') + '\n\n'
