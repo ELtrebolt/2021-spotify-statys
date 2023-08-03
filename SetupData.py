@@ -110,8 +110,6 @@ class SetupData():
 
                 i += 1
 
-        if not song_meta:
-            print(song_meta, tracks, playlist)
         song_meta_df = pd.DataFrame.from_dict(song_meta)
 
         features = self.SP.audio_features(song_meta['id'])
