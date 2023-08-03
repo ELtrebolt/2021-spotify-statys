@@ -1,3 +1,5 @@
+# visualization.py = contains Page Classes which have some unique and shared functions to make graphs
+
 # Imports --------------------------------------------------------------------
 import pickle
 from collections import defaultdict
@@ -20,14 +22,6 @@ import tempfile
 temp_dir = tempfile.TemporaryDirectory()
 os.environ['MPLCONFIGDIR'] = temp_dir.name
 
-# Visualization
-
-# Venn Diagrams
-
-# Convert Graph HTML to Insert-Ready
-
-# Data
-
 # Constants -------------------------------------------------------------------
 
 PERCENTILE_COLS = ['popularity', 'danceability', 'energy', 'loudness',
@@ -44,7 +38,6 @@ COLORS = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A',
 
 # Helper Functions -----------------------------------------------------------------------------------------
 
-
 def _h_bar(series, title=None, xaxis=None, yaxis=None, percents=False,
            long_names=False, hovertext=None, to_html=True, name=None, color=None, markup=True):
     if percents:
@@ -58,7 +51,6 @@ def _h_bar(series, title=None, xaxis=None, yaxis=None, percents=False,
     else:
         y_labels = series.keys()
 
-    # df = pd.DataFrame({'label':y_labels, 'value':series})
     fig = go.Bar(
         x=series,
         y=y_labels,
@@ -238,12 +230,12 @@ def _get_top_n_from_dict(dicty, reverse=False, top_n=10):
 
 
 def _dump(path, obj):
-    with open(path, 'wb') as f:   # Pickling
+    with open(path, 'wb') as f:   
         pickle.dump(obj, f)
 
 
 def _load(path):
-    with open(path, 'rb') as f:  # Unpickling
+    with open(path, 'rb') as f:  
         return pickle.load(f)
 
 # Shared Functions -----------------------------------------------------------------------------------------
@@ -332,8 +324,6 @@ def shared_graph_count_timelines(all_songs_df, title, playlists=None, artists=No
         fig.add_trace(line_timeline.data[i], 1, 1)
         fig.add_trace(continuous_timeline.data[i], 1, 1)
         fig.add_trace(bar_timeline.data[i], 1, 1)
-    # for i in [line_timeline, continuous_line_timeline, bar_timeline]:
-    #     fig.add_traces(i.data, 1, 1)
 
     # Create buttons for drop down menu
     buttons = []
@@ -412,7 +402,7 @@ def shared_graph_top_songs_by_artist(UNIQUE_SONGS_DF, artist_name):
     mask = UNIQUE_SONGS_DF['artist'].apply(lambda x: artist_name in x.split(', '))
     df = UNIQUE_SONGS_DF[mask]
 
-    # df.sort_values(by='num_playlists', inplace=True)
+    # Sort by Num Playlists
     d = defaultdict(list)
     for i, j in zip(df['name'], df['num_playlists']):
         d[j].append(i)
@@ -442,27 +432,7 @@ def shared_graph_top_songs_by_artist(UNIQUE_SONGS_DF, artist_name):
     return Markup(fig.to_html(full_html=False))
 
 
-# def graph_feature_rank_table(col, top_n, lowest=False):
-#     table_cols = ['name', 'artist', col, col + '_rank', 'playlist']
-#     df = session['UNIQUE_SONGS_DF'].sort_values(col, ascending=lowest).head(top_n)
-
-#     fig = go.Figure(data=[go.Table(
-#         columnwidth = [250, 250, 150, 150, 500],
-#         header=dict(values=list(table_cols),
-#                     fill_color='paleturquoise',
-#                     align='center'),
-#         cells=dict(values=[df[i] for i in table_cols],
-#                 fill_color='lavender',
-#                 align='center'))
-#     ])
-
-#     # fig.update_layout(autosize=True)
-
-#     # fig.update_traces(domain=dict(row=2), selector=dict(type='table'))
-
-#     return Markup(fig.to_html(full_html=False))
-
-# Currently Playing Stats Page ----------------------------------------------------------------------------------------------
+# Currently Playing Page ----------------------------------------------------------------------------------------------
 class CurrentlyPlayingPage():
     def __init__(self, song, artist, playlist, all_songs_df, unique_songs_df):
         self._song = song
@@ -683,50 +653,9 @@ class CurrentlyPlayingPage():
 
     def graph_top_playlists_by_artist(self, artist_name):
         return shared_graph_top_playlists_by_artist(self._all_songs_df, artist_name)
-        # ALL_SONGS_DF = self._all_songs_df
-
-        # mask = ALL_SONGS_DF['artist'].apply(lambda x: artist_name in x)
-        # df = ALL_SONGS_DF[mask]
-
-        # series = df['playlist'].value_counts(ascending=True)
-
-        # return _h_bar(series, title='Most Popular Playlists For Artist: ' + artist_name,
-        #               xaxis='Number of Artist Songs in the Playlist')
 
     def graph_top_songs_by_artist(self, artist_name):
         return shared_graph_top_songs_by_artist(self._unique_songs_df, artist_name)
-        # UNIQUE_SONGS_DF = self._unique_songs_df
-        # mask = UNIQUE_SONGS_DF['artist'].apply(lambda x: artist_name in x)
-        # df = UNIQUE_SONGS_DF[mask]
-
-        # # df.sort_values(by='num_playlists', inplace=True)
-        # d = defaultdict(list)
-        # for i, j in zip(df['name'], df['num_playlists']):
-        #     d[j].append(i)
-        # d = {k: ', '.join(v) for k, v in sorted(
-        #     d.items(), key=lambda x: x[0], reverse=True)}
-
-        # fig = go.Figure(data=[go.Table(
-        #     header=dict(
-        #         values=['# Playlists Song Is In', 'Artist Song(s)'],
-        #         line_color='darkslategray',
-        #         fill_color='royalblue',
-        #         font=dict(color='white', size=18),
-        #         height=40
-        #     ),
-        #     cells=dict(
-        #         values=[list(d.keys()), list(d.values())],
-        #         line_color='darkslategray',
-        #         align='center',
-        #         font_size=[18, 14],
-        #         height=30)
-        # )
-        # ])
-
-        # fig.update_layout(autosize=True, title_text='Most Popular Songs For Artist: ' + artist_name,
-        #                   xaxis_title="Number of Playlists The Artist's Song Is In")
-
-        # return Markup(fig.to_html(full_html=False))
 
     def graph_artist_genres(self):
         if len(self._artist_genres) == 1:
@@ -735,68 +664,6 @@ class CurrentlyPlayingPage():
             fig = _venn_diagram_artist_genres(
                 self._artist.split(', '), self._artist_genres)
             return [fig, True]
-
-        # elif len(self._artist_genres) == 2:
-        #     left = set(self._artist_genres[0])
-        #     right = set(self._artist_genres[1])
-
-        #     img = BytesIO()
-
-        #     plt.rcParams.update({'font.size': 18})
-        #     plt.figure(figsize=(18, 10))
-
-        #     fig = venn2([left, right], tuple(self._artist.split(', ')))
-        #     bubbles = ['10', '01', '11']
-        #     text = [left-right, right-left, left & right]
-        #     for i, j in zip(bubbles, text):
-        #         try:
-        #             fig.get_label_by_id(i).set_text('\n'.join(j))
-        #         except:
-        #             pass
-        #     for text in fig.set_labels:
-        #         text.set_fontsize(18)
-
-        #     # Save it to a temporary buffer
-        #     plt.savefig(img, format='png')
-        #     plt.close()
-        #     img.seek(0)
-
-        #     # Embed the result in the html output
-        #     plot_url = base64.b64encode(img.getvalue()).decode('utf8')
-        #     return [plot_url, True]
-
-        # elif len(self._artist_genres) >= 3:
-        #     first = set(self._artist_genres[0])
-        #     second = set(self._artist_genres[1])
-        #     third = set(self._artist_genres[2])
-
-        #     img = BytesIO()
-
-        #     plt.rcParams.update({'font.size': 18})
-        #     plt.figure(figsize=(18, 10))
-
-        #     fig = venn3([first, second, third],
-        #                 set_labels=tuple(self._artist.split(', ')))
-
-        #     bubbles = ['100', '010', '001', '110', '011', '101', '111']
-        #     text = [first-second-third, second-first-third, third-first-second,
-        #             first & second-third, second & third-first, first & third-second,
-        #             first & second & third]
-
-        #     for i, j in zip(bubbles, text):
-        #         try:
-        #             fig.get_label_by_id(i).set_text('\n'.join(j))
-        #         except:
-        #             pass
-
-        #     # Save it to a temporary buffer
-        #     plt.savefig(img, format='png')
-        #     plt.close()
-        #     img.seek(0)
-
-        #     # Embed the result in the html output
-        #     plot_url = base64.b64encode(img.getvalue()).decode('utf8')
-        #     return [plot_url, True]
 
     # What percentage of songs in a playlist or among all playlists have these genres?
     def graph_song_genres_vs_avg(self, playlist=False):
@@ -836,8 +703,8 @@ class CurrentlyPlayingPage():
                 (artist_top_playlists_bar, artist_top_songs_table))
         return artist_top_graphs
 
-# Timeline Home Page ----------------------------------------------------------------------------------------------
 
+# Home Page ----------------------------------------------------------------------------------------------
 
 class HomePage():
     def __init__(self, path, all_songs_df, unique_songs_df):
@@ -910,7 +777,6 @@ class HomePage():
 
         _dump(f'{self._path}home_first_times.pkl', first_times)    
         
-        #df = df[['name', 'playlist', 'year']]
         df = df.groupby(['playlist', 'year'], as_index=False)[
             ['name', 'artist']].agg(lambda x: ', '.join(x))
         df = df.sort_values(by='year')
@@ -940,69 +806,6 @@ class HomePage():
     def _graph_count_timeline(self):
         fig = shared_graph_count_timelines(
             self._all_songs_df, title='<b>Timeline of Adding Songs to Playlists</b>', to_html=False)
-
-        # line_timeline = shared_graph_count_timeline(
-        #     self._all_songs_df, continuous=False, to_html=False)
-        # continuous_line_timeline = shared_graph_count_timeline(
-        #     self._all_songs_df, continuous=True, to_html=False)
-        # bar_timeline = shared_graph_count_timeline(
-        #     self._all_songs_df, bar=True, to_html=False)
-
-        # labels = ["Line", "Continuous", 'Bar']
-        # fig = subplots.make_subplots(rows=1, cols=1, vertical_spacing=.05,
-        #                              subplot_titles=('<b>Timeline of Adding Songs to Playlists</b>'))
-
-        # # Multi-colors for 1 Time Range = Short, Med, Long
-        # for i in [line_timeline, continuous_line_timeline, bar_timeline]:
-        #     fig.add_traces(i.data, 1, 1)
-
-        # # Create buttons for drop down menu
-        # buttons = []
-        # for i, label in enumerate(labels):
-        #     visibility = [i == j for j in range(len(labels))]
-        #     button = dict(
-        #         method='update',
-        #         label=label,
-        #         args=[{'visible': visibility}])
-        #     buttons.append(button)
-
-        # updatemenus = list([
-        #     dict(type='buttons',
-        #          direction='right',
-        #          active=-1,
-        #          y=1.3,
-        #          x=.6,
-        #          buttons=buttons
-        #          )
-        # ])
-
-        # # hoverlabel_font_color='white'
-        # fig.update_layout(updatemenus=updatemenus,
-        #                   showlegend=False, title='<b>Timeline of Adding Songs to Playlists</b>', yaxis_title='# Songs', xaxis_title='Date')
-
-        # fig.update_xaxes(
-        #     rangeslider_visible=True,
-        #     rangeselector=dict(
-        #         buttons=list([
-        #             dict(count=1, label="1m", step="month", stepmode="backward"),
-        #             dict(count=6, label="6m", step="month", stepmode="backward"),
-        #             dict(count=1, label="YTD", step="year", stepmode="todate"),
-        #             dict(count=1, label="1y", step="year", stepmode="backward"),
-        #             dict(step="all")
-        #         ])
-        #     )
-        # )
-
-        # first_date = self._all_songs_df['date_added'].sort_values(
-        #     ascending=True).iloc[0]
-        # first_year = str(first_date)[:4]
-        # current_year = str(self._today.date())[:4]
-        # today = str(self._today.date())[5:].split('-')
-        # month = int(today[0])
-        # day = int(today[1])
-        # for year in range(int(first_year), int(current_year)+1):
-        #     fig.add_vline(x=datetime.datetime(year, month, day), line_width=3,
-        #                   line_dash="dash", line_color="green")
 
         _dump(f'{self._path}home_timeline.pkl',
               Markup(fig.to_html(full_html=False)))
@@ -1053,8 +856,8 @@ class HomePage():
 
         _dump(f'{self._path}home_totals.pkl', overall_data)
 
-# Overall Stats = About Me Page ----------------------------------------------------------------------------------------------
 
+# Overall Stats = About Me Page ----------------------------------------------------------------------------------------------
 
 class AboutPage():
     def __init__(self, path, all_songs_df, unique_songs_df, artists, top_artists, top_songs):
@@ -1109,6 +912,7 @@ class AboutPage():
                        hovertext=[', '.join(d2[i]) for i in data.keys()], yaxis='Genre', long_names=True)
         _dump(f'{self._path}about_followed_artists.pkl', final)
 
+
     def _graph_top_playlists_by_top_50(self, artists=False):
         ALL_SONGS_DF = self._all_songs_df
 
@@ -1121,7 +925,6 @@ class AboutPage():
 
             playlist_dict = defaultdict(int)
             if artists:
-                # artist_dict = defaultdict(defaultdict(int))
                 for name, playlist in zip(ALL_SONGS_DF['artist'], ALL_SONGS_DF['playlist']):
                     found = False
                     for n in name.split(', '):
@@ -1129,7 +932,6 @@ class AboutPage():
                             if not found:
                                 playlist_dict[playlist] += 1
                                 found = True
-                            # artist_dict[playlist][n] += 1
             else:
                 for name, playlist in zip(ALL_SONGS_DF['name'], ALL_SONGS_DF['playlist']):
                     if name in dicty.keys():
@@ -1167,6 +969,7 @@ class AboutPage():
             _dump(f'{self._path}about_playlists_by_songs.pkl',
                   Markup(fig.to_html(full_html=False)))
 
+
     def _graph_top_songs_by_num_playlists(self, top_n=10):
 
         df = self._unique_songs_df.sort_values(
@@ -1181,6 +984,7 @@ class AboutPage():
                        long_names=True, hovertext=[', '.join(i) for i in df['playlist']])
 
         _dump(f'{self._path}about_overall_songs.pkl', final)
+
 
     def _graph_top_artists_and_albums_by_num_playlists(self, top_n=10, albums=False):
         ALL_SONGS_DF = self._all_songs_df
@@ -1216,8 +1020,8 @@ class AboutPage():
         else:
             _dump(f'{self._path}about_overall_artists.pkl', final)
 
-# Analyze Multiple Playlists Page ----------------------------------------------------------------------------------------------
 
+# Analyze Multiple Playlists Page ----------------------------------------------------------------------------------------------
 
 class AnalyzePlaylistsPage():
     def __init__(self, playlists, all_songs_df, unique_songs_df):
@@ -1251,8 +1055,8 @@ class AnalyzePlaylistsPage():
             playlists=self._playlists)
 
     def graph_genres_by_playlists(self):
-        '''Return a stacked horizontal bar graph, with each bar being a genre, and each stack being % of artist genre in a different playlist
-        '''
+        '''Return a stacked horizontal bar graph, with each bar being a genre, 
+        and each stack being % of artist genre in a different playlist'''
 
         # Create dataframe - each row a genre, each column a playlist
         percents = defaultdict(list)
@@ -1395,8 +1199,8 @@ class AnalyzePlaylistPage():
         yaxis = 'Level (Low -> High)'
         return _boxplot(x_data, y_data, text, title, xaxis, yaxis)
 
-# Top 50 Page ----------------------------------------------------------------------------------------------
 
+# Top 50 Page ----------------------------------------------------------------------------------------------
 
 class Top50Page():
     def __init__(self, path, unique_songs_df, top_songs, top_artists):
@@ -1466,47 +1270,15 @@ class Top50Page():
             return _boxplot(x_data, y_data, text, title, xaxis, yaxis, markup=False, name=TIME_RANGE_DICT[time_range][0])
 
     def _graph_top_genres_and_top_songs_or_artists_by_genres(self, time_range, artists=False, name=None, color=None, top_n=10):
-        '''Output = horizontal bar graph of % of Top 50 Songs by Artist Genre
-        '''
+        '''Output = horizontal bar graph of % of Top 50 Songs by Artist Genre'''
+
         rank_col = 'artists_' if artists else 'songs_'
         rank_col += TIME_RANGE_DICT[time_range][1]
 
-        # if artists:
-        #     mask = self._unique_songs_df[rank_col].apply(lambda x: type(x) == int or (type(x) == str and any([i.isdigit() for i in x.split(', ')])))
-        # else:
         mask = self._unique_songs_df[rank_col].apply(lambda x: type(x) == int)
         df = self._unique_songs_df[mask]
 
-        # if artists:
-        #     mask = self._unique_songs_df[rank_col].apply(lambda x: type(
-        #         x) == int or (type(x) == str and any([i != 'N/A' for i in x.split(',')])))
-        # else:
-        #     mask = self._unique_songs_df[rank_col].apply(
-        #         lambda x: type(x) == int)
-        # df = self._unique_songs_df[mask]
-        # if artists:
-        #     new_list = []
-        #     for i in df[rank_col]:
-        #         if type(i) == str:
-        #             listy = i.split(', ')
-        #             for j in listy:
-        #                 try:
-        #                     k = int(j)
-        #                     new_list.append(k)
-        #                     break
-        #                 except:
-        #                     pass
-        #         else:
-        #             new_list.append(i)
-        #     df[rank_col] = new_list
-
         total = len(df[rank_col].unique())   # total should be 50
-        # print(df[rank_col].unique(), total)
-        # if artists:
-        #     print('DF Length: ', len(df))
-        #     print('Should Be 50: ', total)
-        #     if total != 50:
-        #         print(sorted(df[rank_col].unique()))
 
         num_by_genre = dict()
         top_by_genre = dict()
@@ -1634,12 +1406,6 @@ class Top50Page():
                                    showarrow=False)
                           ]
                           )
-        # fig.update_traces(marker=dict(color="RoyalBlue"), selector=dict(type='bar'))
-        # Colors from https://plotly.com/python/discrete-color/#color-sequences-in-plotly-express
-        # fig.update_traces(marker=dict(color='#1F77B4'), row=1)
-        # fig.update_traces(marker=dict(color='#D62728'), row=2)
-        # fig.update_traces(marker=dict(color='#2CA02C'), row=3)
-        # fig.update_traces(marker=dict(color='#9467BD'), row=4)
 
         # Only show 1st 18 Traces on page-load
         Ld = len(fig.data)
@@ -1661,8 +1427,8 @@ class Top50Page():
         _dump(f'{self._path}top50_graph.pkl',
               Markup(fig.to_html(full_html=False)))
 
-# Analyze Single Artist Page ----------------------------------------------------------------------------------------------
 
+# Analyze Single Artist Page ----------------------------------------------------------------------------------------------
 
 class AnalyzeArtistPage():
     def __init__(self, artist, all_songs_df, unique_songs_df):
@@ -1758,8 +1524,8 @@ class AnalyzeArtistPage():
         return _boxplot(x_data, y_data, text, title, xaxis, yaxis)
 
     def graph_playlists_by_artist_genres(self):
-        '''Return a stacked horizontal bar graph, with each bar being a playlist, and each stack being % of artist genre in that playlist
-        '''
+        '''Return a stacked horizontal bar graph, with each bar being a playlist, 
+        and each stack being % of artist genre in that playlist'''
 
         # Create dataframe - each row a playlist, each column a genre
         percents = defaultdict(list)
@@ -1792,8 +1558,8 @@ class AnalyzeArtistPage():
             'categoryorder': 'total ascending'}, yaxis_title='Playlist', xaxis_title='% of Songs With Genre', title='Playlists Most Likely To Have Songs Similar to ' + self._artist)
         return Markup(fig.to_html(full_html=False))
 
-# Analyze Multiple Artists Page ----------------------------------------------------------------------------------------------
 
+# Analyze Multiple Artists Page ----------------------------------------------------------------------------------------------
 
 class AnalyzeArtistsPage():
     def __init__(self, artists, all_songs_df, unique_songs_df):

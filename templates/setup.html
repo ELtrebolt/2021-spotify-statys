@@ -19,6 +19,10 @@
             else
             {
                 dataContainer.innerHTML += event.data;
+                if(data.includes("ERROR="))
+                {
+                    eventSource.close();
+                }
             }
         }
 
