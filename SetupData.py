@@ -154,8 +154,8 @@ class SetupData():
                     df = self._get_playlist(name, _id)
                     ALL_SONGS_DF = pd.concat([ALL_SONGS_DF, df])
                     yield 'data:' + name + '   ' + str(count) + '/' + str(total) + '<br/>\n\n\n'
-                except:
-                    yield 'data:' + name + '   ' + str(count) + '/' + str(total) + ' *COULD NOT RETRIEVE likely because made private<br/>\n\n\n'
+                except Exception as e:
+                    yield 'data:ERROR=' + traceback.format_exc().replace('\n', '<br>') + '\n\n'
                 count += 1
 
             # Yung Yi had the problem of 'index' not found in axis
