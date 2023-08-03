@@ -185,7 +185,7 @@ class SetupData():
             status = {'SETUP1': True, 'SETUP2': False, 'SETUP3': False}
             _dump(f'{self.path}collection.pkl', status)
 
-            yield 'data:' + REDIRECT_URI + '\n\n'
+            yield 'data:REDIRECT_URI=' + REDIRECT_URI + '\n\n'
             # yield '<script>window.location.href="' + REDIRECT_URI + '"</script>'
             # yield '<br>\nDone! Please Refresh The Page'
         except Exception as e:
@@ -357,7 +357,7 @@ class SetupData():
             status = {'SETUP1': True, 'SETUP2': True, 'SETUP3': False}
             _dump(f'{self.path}collection.pkl', status)
 
-            yield 'data:' + REDIRECT_URI + '\n\n'
+            yield 'data:REDIRECT_URI=' + REDIRECT_URI + '\n\n'
             # yield '<script>window.location.href="' + REDIRECT_URI + '"</script>'
         except Exception as e:
             exc_type, exc_obj, exc_tb = sys.exc_info()

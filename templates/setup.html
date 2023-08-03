@@ -12,9 +12,9 @@
             var dataContainer = document.getElementById('data-container');
             console.log(event.data);
             data = JSON.stringify(event.data);
-            if(data.includes("http://"))
+            if(data.includes("REDIRECT_URI="))
             {
-                window.location.href = event.data
+                window.location.href = event.data.split('=')[1];
             }
             else
             {
