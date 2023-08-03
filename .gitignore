@@ -8,3 +8,4 @@ __pycache__/
 .spotify_caches
 .vscode
 .env
+.cache

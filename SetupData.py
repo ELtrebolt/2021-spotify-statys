@@ -7,9 +7,9 @@ import sys
 import traceback
 
 # Test Local
-# REDIRECT_URI = 'http://127.0.0.1:5000/'
+REDIRECT_URI = 'http://127.0.0.1:5000/'
 # Run Heroku
-REDIRECT_URI = 'https://spotify-statys.herokuapp.com/'
+# REDIRECT_URI = 'https://spotify-statys.herokuapp.com/'
 PERCENTILE_COLS = ['popularity', 'danceability', 'energy', 'loudness', 'speechiness',
                    'acousticness', 'instrumentalness', 'liveness', 'valence', 'tempo', 'duration']
 
@@ -161,7 +161,7 @@ class SetupData():
             #start_time = time.time()
             count = 1
             total = len(self.PLAYLIST_DICT)
-            yield '<h1>Collecting Your Playlists</h1>'
+            yield 'data:<h1>Collecting Your Playlists</h1>\n\n'
 
             ALL_SONGS_DF = pd.DataFrame()
             for name, _id in list(self.PLAYLIST_DICT.items()):
@@ -172,9 +172,9 @@ class SetupData():
                 try:
                     df = self._get_playlist(name, _id)
                     ALL_SONGS_DF = pd.concat([ALL_SONGS_DF, df])
-                    yield name + '   ' + str(count) + '/' + str(total) + '<br/>\n'
+                    yield 'data:' + name + '   ' + str(count) + '/' + str(total) + '<br/>\n\n\n'
                 except:
-                    yield name + '   ' + str(count) + '/' + str(total) + ' *COULD NOT RETRIEVE likely because made private<br/>\n'
+                    yield 'data:' + name + '   ' + str(count) + '/' + str(total) + ' *COULD NOT RETRIEVE likely because made private<br/>\n\n\n'
                 count += 1
 
             # Yung Yi had the problem of 'index' not found in axis
@@ -185,8 +185,8 @@ class SetupData():
             status = {'SETUP1': True, 'SETUP2': False, 'SETUP3': False}
             _dump(f'{self.path}collection.pkl', status)
 
-            yield '<script>window.location.href="' + REDIRECT_URI + '"</script>'
-            # yield '{{ url_for('index') }}'
+            yield 'data:' + REDIRECT_URI + '\n\n'
+            # yield '<script>window.location.href="' + REDIRECT_URI + '"</script>'
             # yield '<br>\nDone! Please Refresh The Page'
         except Exception as e:
             function = 'Setup1'
@@ -314,32 +314,32 @@ class SetupData():
 
     def setup_2(self, ALL_SONGS_DF):
         try:
-            yield '<h1>Grouping Your Data</h1>'
+            yield 'data:<h1>Grouping Your Data</h1>\n\n'
 
-            yield 'Getting Unique Songs...1/10<br>\n'
+            yield 'data:Getting Unique Songs...1/10<br>\n\n\n'
             self._get_unique_songs_df()
 
-            yield 'Getting Top Artists...2/10<br>\n'
+            yield 'data:Getting Top Artists...2/10<br>\n\n\n'
             self._get_top_artists()
 
-            yield 'Getting Top Songs...3/10<br>\n'
+            yield 'data:Getting Top Songs...3/10<br>\n\n\n'
             self._get_top_songs()
 
-            yield 'Adding Top Artists Rank...4/10<br>\n'
+            yield 'data:Adding Top Artists Rank...4/10<br>\n\n\n'
             self._add_top_artists_rank()
 
-            yield 'Adding Top Songs Rank...5/10<br>\n'
+            yield 'data:Adding Top Songs Rank...5/10<br>\n\n\n'
             self._add_top_songs_rank()
 
-            yield 'Getting Artist Genres...6/10<br>\n'
+            yield 'data:Getting Artist Genres...6/10<br>\n\n\n'
             self._add_genres()
 
-            yield 'Setting Up Home Page...7/10<br>\n'
+            yield 'data:Setting Up Home Page...7/10<br>\n\n\n'
             UNIQUE_SONGS_DF = pd.read_pickle(f'{self.path}unique_songs_df.pkl')
             home_page = HomePage(self.path, ALL_SONGS_DF, UNIQUE_SONGS_DF)
             _dump(f'{self.path}home_page.pkl', home_page)
 
-            yield 'Setting Up About Me Page...8/10<br>\n'
+            yield 'data:Setting Up About Me Page...8/10<br>\n\n\n'
             artists = self.SPOTIFY.current_user_followed_artists()[
                 'artists']['items']
             top_artists = _load(f'{self.path}top_artists.pkl')
@@ -348,16 +348,17 @@ class SetupData():
                 self.path, ALL_SONGS_DF, UNIQUE_SONGS_DF, artists, top_artists, top_songs)
             _dump(f'{self.path}about_page.pkl', about_page)
 
-            yield 'Setting up Top50 Page...9/10<br>\n'
+            yield 'data:Setting up Top50 Page...9/10<br>\n\n\n'
             top50_page = Top50Page(
                 self.path, UNIQUE_SONGS_DF, top_songs, top_artists)
             _dump(f'{self.path}top50_page.pkl', top50_page)
 
-            yield 'Finalizing Data Collection...10/10'
+            yield 'data:Finalizing Data Collection...10/10\n\n'
             status = {'SETUP1': True, 'SETUP2': True, 'SETUP3': False}
             _dump(f'{self.path}collection.pkl', status)
 
-            yield '<script>window.location.href="' + REDIRECT_URI + '"</script>'
+            yield 'data:' + REDIRECT_URI + '\n\n'
+            # yield '<script>window.location.href="' + REDIRECT_URI + '"</script>'
         except Exception as e:
             exc_type, exc_obj, exc_tb = sys.exc_info()
             fname = os.path.split(exc_tb.tb_frame.f_code.co_filename)[1]

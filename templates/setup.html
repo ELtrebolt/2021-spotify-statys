@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head> </head>
+<body>
+    <div id="data-container"></div>
+
+    <script>
+        var setup2 = "{{ setup2 }}";
+
+        // Function to handle incoming data from the server
+        function handleStreamData(event) {
+            var dataContainer = document.getElementById('data-container');
+            console.log(event.data);
+            data = JSON.stringify(event.data);
+            if(data.includes("http://"))
+            {
+                window.location.href = event.data
+            }
+            else
+            {
+                dataContainer.innerHTML += event.data;
+            }
+        }
+
+        if (setup2 === 'false')
+        {
+            var eventSource = new EventSource('/setup_1');
+        }
+        else
+        {
+            var eventSource = new EventSource('/setup_2');
+        }
+        eventSource.onmessage = handleStreamData;
+
+    </script>
+</body>
+</html>
