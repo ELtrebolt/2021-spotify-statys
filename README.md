@@ -14,7 +14,7 @@
 - Visualized insights with over 30 unique Plotly figures including bar charts, timelines, and box plots
 - **Demo1:** Features 5 Pages = Home, About Me, Currently Playing, Top 50, Search (Artists/Playlists)
 
-[https://github.com/ELtrebolt/2021-spotify-statys/blob/master/Spotify-StatysDemo1.mp4](https://github.com/ELtrebolt/2021-spotify-statys/assets/44250460/ed9e9a98-9688-417c-bbf8-f735e8062f7f)
+[https://github.com/ELtrebolt/2021-spotify-statys/assets/44250460/ed9e9a98-9688-417c-bbf8-f735e8062f7f](https://github.com/ELtrebolt/2021-spotify-statys/assets/44250460/ed9e9a98-9688-417c-bbf8-f735e8062f7f)
 
 ## Tech Stack
 - **Overview**
@@ -28,7 +28,7 @@
     - In route setup_1, return Response with Generator Function and text/event-stream
     - In Generator Function, yield "data:" + streamed-data + "\n\n"
 - **Dataframe Schema**
-    - ALL_SONGS_DF
+    - **ALL_SONGS_DF**
         - id
         - name
         - artist = String separated by commas
@@ -40,7 +40,7 @@
         - added_at = String not Date
         - duration
         - genres = LIST of LISTS
-    - UNIQUE_SONGS_DF
+    - **UNIQUE_SONGS_DF**
         - groups ALL_SONGS_DF by name and artist
         - playlist becomes playlists = separated by commas
         - added_at = separated by commas
@@ -73,23 +73,23 @@ The following folders are dynamically created while running the app:
 - **.spotify_caches** --> save cache token for the SPOTIFY object
 
 ## Workflow
-1. Activate Python Virtual Environment - env\scripts\activate
-2. Test Locally - flask run
-3. Troubleshooting
+1. **Activate Python Virtual Environment**** - env\scripts\activate
+2. **Test Locally** - flask run
+3. **Troubleshooting**
     - Delete .data .flask_session .spotify_caches .cache before running
     - heroku logs --tail
-4. Heroku Setup
+4. **Heroku Setup**
     - pip install gunicorn
     - pip freeze > requirements.txt
     - Procfile / Runtime Files
-5. Uploading to Heroku
+5. **Uploading to Heroku**
     - Change REDIRECT_URI in app.py and SetupData.py to Heroku URL
     - heroku login
     - heroku git:remote -a spotify-statys
     - git add/commit
     - git push heroku master
     - heroku open
-6. Pulling from Heroku
+6. **Pulling from Heroku**
     - Install Heroku CLI
     - heroku login
     - heroku git:clone -a spotify-statys
