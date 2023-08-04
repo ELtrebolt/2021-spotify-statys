@@ -12,8 +12,7 @@
 - Built a web application using the Python-Flask framework integrated and hosted with Heroku
 - Implemented dynamic querying through the Spotify API based on the user’s created playlists
 - Visualized insights with over 30 unique Plotly figures including bar charts, timelines, and box plots
-- Features 5 Pages = Home, About Me, Currently Playing, Top 50, Search
-    - Search lets you Analyze Artists and Playlists
+- **Demo1:** Features 5 Pages = Home, About Me, Currently Playing, Top 50, Search (Artists/Playlists)
 
 ## Tech Stack
 - **Overview**
@@ -50,7 +49,7 @@
             - med, long
         - songs_short_rank = INT or "N/A"
             - med, long
-- **Frontload Data Collection**
+- **Frontload Data Collection & Querying**
     - Pickle Library = Dump and Load Python Objects in Local File Storage
     - Before letting the user explore the pages - make queries, draw graphs, and pickle those graphs so the pages can be quickly loaded without having to do the same work again
     - Sign_Out will delete all files, and Heroku does so automatically after the User Session
@@ -64,6 +63,12 @@
 - **runtime.txt** --> required for Heroku
 - **SetupData** --> Class to build Pandas Dataframes from Spotify API
 - **visualization.py** --> Class to build Pages and pickle Plotly graphs
+
+The following folders are dynamically created while running the app:
+- **.data** --> save .pkl graphs per Spotify User ID
+- **.flask_session** --> save session ID
+- **.sp_caches** --> save cache token for the SP object
+- **.spotify_caches** --> save cache token for the SPOTIFY object
 
 ## Workflow
 1. Activate Python Virtual Environment - env\scripts\activate
@@ -93,8 +98,11 @@
 - **Known Bugs**
     1. Top 50 - Last 4 Weeks - % of Top 50 Artists (bottom graph) will not always grab the full 50 artists = usually only the top 29 or 30. 
     2. Today's Date = a day ahead sometimes
-- **Future Add Ons**
-    1. Search Autocomplete
+- **Future Features**
+    1. Collect Liked Songs and Include in All Graphs
+    2. Search Autocomplete
+    3. Styling
+    4. Mobile Responsiveness
 
 ## Features
 - **Home Page**
