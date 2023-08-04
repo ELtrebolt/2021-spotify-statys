@@ -13,6 +13,7 @@
 - Implemented dynamic querying through the Spotify API based on the user’s created playlists
 - Visualized insights with over 30 unique Plotly figures including bar charts, timelines, and box plots
 - **Demo1:** Features 5 Pages = Home, About Me, Currently Playing, Top 50, Search (Artists/Playlists)
+https://github.com/ELtrebolt/2021-spotify-statys/blob/master/Spotify-Statys%20Demo%201.mp4
 
 ## Tech Stack
 - **Overview**
