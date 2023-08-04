@@ -108,13 +108,13 @@ The following folders are dynamically created while running the app:
 
 ## Features
 - **Home Page**
-    - On This Date
+    - **On This Date**
         - What songs did you add to which playlists a year ago today?
         - What playlists did you create on this date?
         - What artists did you add to a playlist for the first time on this date?
     - Timeline of Adding Songs to Playlists
     - Most Recent Songs Added to Playlists
-    - Library Totals
+    - **Library Totals**
         - Across 59 playlists, I've added 5738 songs
         - My playlists have 3383 unique songs, 2359 unique albums, and 1870 unique artists
 - **About Me Page**

@@ -8,9 +8,9 @@ import sys
 import traceback
 
 # Test Local
-REDIRECT_URI = 'http://127.0.0.1:5000/'
+# REDIRECT_URI = 'http://127.0.0.1:5000/'
 # Run Heroku
-# REDIRECT_URI = 'https://spotify-statys.herokuapp.com/'
+REDIRECT_URI = 'https://spotify-statys.herokuapp.com/'
 PERCENTILE_COLS = ['popularity', 'danceability', 'energy', 'loudness', 'speechiness',
                    'acousticness', 'instrumentalness', 'liveness', 'valence', 'tempo', 'duration']
 

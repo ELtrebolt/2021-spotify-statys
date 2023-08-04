@@ -578,7 +578,7 @@ class CurrentlyPlayingPage():
                 song_df = ALL_SONGS_DF[ALL_SONGS_DF['name'] == self._song]
                 song_df = song_df[song_df['artist'] == self._artist]
 
-                playlist_df = playlist_df.append(song_df)
+                playlist_df = pd.concat([playlist_df, song_df])
 
             for col in PERCENTILE_COLS:
                 sz = playlist_df[col].size-1
