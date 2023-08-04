@@ -14,7 +14,7 @@
 - Visualized insights with over 30 unique Plotly figures including bar charts, timelines, and box plots
 - **Demo1:** Features 5 Pages = Home, About Me, Currently Playing, Top 50, Search (Artists/Playlists)
 
-https://github.com/ELtrebolt/2021-spotify-statys/blob/master/Spotify-StatysDemo1.mp4
+[https://github.com/ELtrebolt/2021-spotify-statys/blob/master/Spotify-StatysDemo1.mp4](https://github.com/ELtrebolt/2021-spotify-statys/assets/44250460/ed9e9a98-9688-417c-bbf8-f735e8062f7f)
 
 ## Tech Stack
 - **Overview**
