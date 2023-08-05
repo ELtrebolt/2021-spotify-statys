@@ -14,6 +14,7 @@
 - Visualized insights with over 30 unique Plotly figures including bar charts, timelines, and box plots
   
 - **Demo 1:** Features 5 Pages = Home, About Me, Currently Playing, Top 50, Search (Artists/Playlists)
+
 [https://github.com/ELtrebolt/2021-spotify-statys/assets/44250460/ed9e9a98-9688-417c-bbf8-f735e8062f7f](https://github.com/ELtrebolt/2021-spotify-statys/assets/44250460/ed9e9a98-9688-417c-bbf8-f735e8062f7f)
 
 - **Demo 2:** Currently Playing, Temporary Window Caching, Individual User Session Data
@@ -21,6 +22,7 @@
     - Best when you're jamming to one of your own playlists, but also works if you're adding songs to a queue or listening to someone else's playlist.
     - If you close the window without logging out, you will have some time to reload the page without having to sign in and collect your data again
     - Others cannot access your data even if you forget to sign out
+
 [https://github.com/ELtrebolt/2021-spotify-statys/assets/44250460/00ebe70e-50d4-4933-a8a8-78be41a0c7e2](https://github.com/ELtrebolt/2021-spotify-statys/assets/44250460/00ebe70e-50d4-4933-a8a8-78be41a0c7e2)
 
 ## Tech Stack
