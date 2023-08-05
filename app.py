@@ -18,13 +18,13 @@ from flask_caching import Cache
 from flask_session import Session
 from flask import Flask, session, request, redirect, render_template, Response, stream_with_context
 
-CLIENT_ID = 'YOUR-CLIENT-ID-HERE'
-CLIENT_SECRET = 'YOUR-CLIENT-SECRET-HERE'
+CLIENT_ID = '6d54b292d6dd41f5a9b2942bc0098149'
+CLIENT_SECRET = '1ab268173f1445198ba8cbce48a8ec5e'
 
 # Test Local
-REDIRECT_URI = 'http://127.0.0.1:5000/'
+# REDIRECT_URI = 'http://127.0.0.1:5000/'
 # Run Heroku
-# REDIRECT_URI = 'https://spotify-statys.herokuapp.com/'
+REDIRECT_URI = 'https://spotify-statys.herokuapp.com/'
 
 # -------------------------------Data-----------------------------------------------
 
