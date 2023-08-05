@@ -67,11 +67,14 @@ class SetupData():
     # Tracks can only get 100 items at a time
     def _get_100_songs(self, tracks, playlist):
 
+        # Empty Playlist
+        if len(tracks['items']) == 0:
+            return pd.DataFrame()
+
         song_meta = {'id': [], 'name': [],
                      'artist': [], 'album': [], 'explicit': [], 'popularity': [],
                      'playlist': [], 'date_added': [], 'artist_ids': []}
 
-        i = 1
         for item in tracks['items']:
             meta = item['track']
 
@@ -107,8 +110,6 @@ class SetupData():
                 # for whatever reason converting timezone doesn't show same date added as Spotify
                 date_added = d1.strftime('%Y-%m-%d')
                 song_meta['date_added'].append(date_added)
-
-                i += 1
 
         song_meta_df = pd.DataFrame.from_dict(song_meta)
 
