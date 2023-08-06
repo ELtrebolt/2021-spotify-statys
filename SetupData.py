@@ -90,8 +90,8 @@ class SetupData():
                                    for singer in meta['artists']])
                 song_meta['artist'].append(artist)
 
-                artist_ids = ', '.join([singer['id']
-                                       for singer in meta['artists']])
+                artist_ids = ', '.join(filter(None, [singer['id'] if singer else ''
+                                       for singer in meta['artists']]))
                 song_meta['artist_ids'].append(artist_ids)
 
                 album = meta['album']['name']
@@ -268,6 +268,8 @@ class SetupData():
         unique_artist_ids = set()
         for i in UNIQUE_SONGS_DF['artist_ids']:
             unique_artist_ids = unique_artist_ids | set(i.split(', '))
+        # if '' in unique_artist_ids:
+        #     unique_artist_ids.remove('')
 
         # Save artist genres from Spotify API all at once using dict(), then make new cols for dataframes
         # {artist1: genres_list, artist2: ['N/A']}
@@ -294,7 +296,11 @@ class SetupData():
             for i in df['artist_ids']:
                 song_genres = []
                 for j in i.split(', '):
+                    # try:
                     song_genres.append(genres_dict[j])
+                    # except Exception as e:
+                    #     yield f'data:No Artist Id Found<br>\n\n\n'
+                    #     song_genres.append('N/A')
                 genres_list.append(song_genres)
             df['genres'] = genres_list
 

@@ -780,6 +780,14 @@ class HomePage():
         df = df.groupby(['playlist', 'year'], as_index=False)[
             ['name', 'artist']].agg(lambda x: ', '.join(x))
         df = df.sort_values(by='year')
+        try:
+            df.columns=df.columns.str.strip()
+            years = df['year'].to_list()
+            playlists = df['playlist'].to_list()
+            names = df['name'].to_list()
+            artists = [', '.join(list(dict.fromkeys((i.split(', '))))) for i in df['artist']]
+        except:
+            return
 
         fig = go.Figure(data=[go.Table(
             header=dict(
@@ -790,9 +798,7 @@ class HomePage():
                 height=40
             ),
             cells=dict(
-                values=[df['year'].to_list(), df['playlist'].to_list(), df['name'].to_list(), 
-                    [', '.join(list(dict.fromkeys((i.split(', '))))) for i in df['artist']]
-                ],
+                values=[years, playlists, names, artists],
                 line_color='darkslategray',
                 align='center',
                 font_size=[18, 14],
