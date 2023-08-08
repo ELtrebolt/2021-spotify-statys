@@ -79,7 +79,8 @@ class SetupData():
             meta = item['track']
 
             # For Bernardo and Adam, this was the error - meta was None
-            if meta is not None:
+            # For Beni meta['id'] was None due to Kanye West leaked unrelease - Spread Your Wings & Flowers
+            if meta is not None and meta['id'] is not None:
 
                 song_meta['id'].append(meta['id'])
 
@@ -113,6 +114,7 @@ class SetupData():
 
         song_meta_df = pd.DataFrame.from_dict(song_meta)
 
+
         features = self.SP.audio_features(song_meta['id'])
         features_df = pd.DataFrame.from_dict(features)
 
@@ -131,7 +133,11 @@ class SetupData():
     def _get_playlist(self, name, _id):
         df = pd.DataFrame()
 
-        results = self.SP.playlist(_id, fields='tracks,next')
+        try:
+            results = self.SP.playlist(_id, fields='tracks,next')
+        except:
+            return 'data:ERROR=' + traceback.format_exc().replace('\n', '<br>') + '\n\n'
+        
         tracks = results['tracks']
         df = pd.concat([df, self._get_100_songs(tracks, name)])
 
@@ -151,12 +157,12 @@ class SetupData():
 
             ALL_SONGS_DF = pd.DataFrame()
             for name, _id in list(self.PLAYLIST_DICT.items()):
-                try:
-                    df = self._get_playlist(name, _id)
+                df = self._get_playlist(name, _id)
+                if type(df) == str:
+                    yield df
+                else:
                     ALL_SONGS_DF = pd.concat([ALL_SONGS_DF, df])
                     yield 'data:' + name + '   ' + str(count) + '/' + str(total) + '<br/>\n\n\n'
-                except Exception as e:
-                    yield 'data:ERROR=' + traceback.format_exc().replace('\n', '<br>') + '\n\n'
                 count += 1
 
             # Yung Yi had the problem of 'index' not found in axis

@@ -102,6 +102,7 @@ The following folders are dynamically created while running the app:
     - Install Heroku CLI
     - heroku login
     - heroku git:clone -a spotify-statys
+    - python -m venv env
     - env\scripts\activate
     - pip install -r requirements.txt
 
