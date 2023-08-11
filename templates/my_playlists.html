@@ -19,37 +19,38 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 
-    <h1>Analysis of Artist: {{ artist_name }}</h1>
-
+    <h1>My Playlists Page</h1>
+    <hr>
     <body>
-        <h2>Artist Timeline</h2>
-        {{timeline}}
-        <hr>
-
-        <h2>Artist Top 50 Rankings</h2>
-        {{top_rank_table}}
-        <hr>
-
-        <h2>Artist Top Playlists & Songs</h2>
+        <h2>Playlists Length By Length & Explicitness</h2>
         <div class="wrapper">
             <div class="div div2">
-                {{ top_playlists }}
+                {{ playlists_by_length }}
             </div>
             <div class="div div2">
-                {{ top_songs }}
+                {{ playlists_by_explicit }}
             </div>
         </div>
         <hr>
 
-        <h2>Artist Audio Features</h2>
-        {{ features_boxplot }}
+        <h2>Playlists by Top 50 Songs / Artists</h2>
+        <div class="wrapper">
+            <div class="div div2">
+                {{ top_playlists_by_songs }}
+            </div>
+            <div class="div div2">
+                {{ top_playlists_by_artists }}
+            </div>
+        </div>
         <hr>
 
-        <h2>Artist Genres</h2>
-        <h2>{{ artist_genres }}</h2>
-        {{ playlists_genres }}
+        <h2>Playlists' Audio Features</h2>
+        {{ avg_boxplot }}
         <hr>
-        
+
+        <h2>Playlist Timelines</h2>
+        {{ first_last_added }}
+        <hr>
     </body>
 
 </html>

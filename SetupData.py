@@ -3,14 +3,13 @@ from datetime import datetime
 import pandas as pd
 import pickle
 import os
-from visualization import HomePage, AboutPage, Top50Page
-import sys
+from visualization import HomePage, AboutPage, Top50Page, MyPlaylistsPage
 import traceback
 
 # Test Local
-# REDIRECT_URI = 'http://127.0.0.1:5000/'
+REDIRECT_URI = 'http://127.0.0.1:5000/'
 # Run Heroku
-REDIRECT_URI = 'https://spotify-statys.herokuapp.com/'
+# REDIRECT_URI = 'https://spotify-statys.herokuapp.com/'
 PERCENTILE_COLS = ['popularity', 'danceability', 'energy', 'loudness', 'speechiness',
                    'acousticness', 'instrumentalness', 'liveness', 'valence', 'tempo', 'duration']
 
@@ -99,7 +98,7 @@ class SetupData():
                 song_meta['album'].append(album)
 
                 explicit = meta['explicit']
-                song_meta['explicit'].append(explicit)
+                song_meta['explicit'].append(1 if explicit == True else 0)
 
                 popularity = meta['popularity']
                 song_meta['popularity'].append(popularity)
@@ -196,6 +195,7 @@ class SetupData():
         UNIQUE_SONGS_DF['num_playlists'] = [
             len(i) for i in UNIQUE_SONGS_DF['playlist']]
 
+        UNIQUE_SONGS_DF.to_csv('unique_songs_df.csv')
         UNIQUE_SONGS_DF.to_pickle(f"{self.path}unique_songs_df.pkl")
 
 
@@ -316,47 +316,53 @@ class SetupData():
 
     # Group Data with Top Artists/Songs, Genres, and setup Pages
     def setup_2(self, ALL_SONGS_DF):
+        total = 11
         try:
             yield 'data:<h1>Grouping Your Data</h1>\n\n'
 
-            yield 'data:Getting Unique Songs...1/10<br>\n\n\n'
+            yield f'data:Getting Unique Songs...1/{total}<br>\n\n\n'
             self._get_unique_songs_df()
 
-            yield 'data:Getting Top Artists...2/10<br>\n\n\n'
+            yield f'data:Getting Top Artists...2/{total}<br>\n\n\n'
             self._get_top_artists()
 
-            yield 'data:Getting Top Songs...3/10<br>\n\n\n'
+            yield f'data:Getting Top Songs...3/{total}<br>\n\n\n'
             self._get_top_songs()
 
-            yield 'data:Adding Top Artists Rank...4/10<br>\n\n\n'
+            yield f'data:Adding Top Artists Rank...4/{total}<br>\n\n\n'
             self._add_top_artists_rank()
 
-            yield 'data:Adding Top Songs Rank...5/10<br>\n\n\n'
+            yield f'data:Adding Top Songs Rank...5/{total}<br>\n\n\n'
             self._add_top_songs_rank()
 
-            yield 'data:Getting Artist Genres...6/10<br>\n\n\n'
+            yield f'data:Getting Artist Genres...6/{total}<br>\n\n\n'
             self._add_genres()
 
-            yield 'data:Setting Up Home Page...7/10<br>\n\n\n'
+            yield f'data:Setting Up Home Page...7/{total}<br>\n\n\n'
             UNIQUE_SONGS_DF = pd.read_pickle(f'{self.path}unique_songs_df.pkl')
             home_page = HomePage(self.path, ALL_SONGS_DF, UNIQUE_SONGS_DF)
             _dump(f'{self.path}home_page.pkl', home_page)
 
-            yield 'data:Setting Up About Me Page...8/10<br>\n\n\n'
+            yield f'data:Setting Up About Me Page...8/{total}<br>\n\n\n'
             artists = self.SPOTIFY.current_user_followed_artists()[
                 'artists']['items']
             top_artists = _load(f'{self.path}top_artists.pkl')
             top_songs = _load(f'{self.path}top_songs.pkl')
             about_page = AboutPage(
-                self.path, ALL_SONGS_DF, UNIQUE_SONGS_DF, artists, top_artists, top_songs)
+                self.path, ALL_SONGS_DF, UNIQUE_SONGS_DF, artists)
             _dump(f'{self.path}about_page.pkl', about_page)
 
-            yield 'data:Setting up Top50 Page...9/10<br>\n\n\n'
+            yield f'data:Setting up Top50 Page...9/{total}<br>\n\n\n'
             top50_page = Top50Page(
-                self.path, UNIQUE_SONGS_DF, top_songs, top_artists)
+                self.path, UNIQUE_SONGS_DF, top_artists)
             _dump(f'{self.path}top50_page.pkl', top50_page)
 
-            yield 'data:Finalizing Data Collection...10/10\n\n'
+            yield f'data:Setting up My Playlists Page...10/{total}<br>\n\n\n'
+            myplaylists_page = MyPlaylistsPage(
+                self.path, ALL_SONGS_DF, top_artists, top_songs)
+            _dump(f'{self.path}myplaylists_page.pkl', myplaylists_page)
+
+            yield f'data:Finalizing Data Collection...{total}/{total}\n\n'
             status = {'SETUP1': True, 'SETUP2': True, 'SETUP3': False}
             _dump(f'{self.path}collection.pkl', status)
 

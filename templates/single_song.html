@@ -19,7 +19,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 
-    <h1>You are playing "{{song}}" by [{{artist}}] while listening to your playlist <i>{{playlist}}</i></h1>
+    <div>
+        <h1>"{{song}}" by
+        {% for a in artist %}
+            <a href="/artists/{{a}}">{{ a }}</a>
+            {% if not loop.last %},{% endif %}
+        {% endfor %}
+        </h1>
+    </div>
     <hr>
 
     <body>
@@ -38,15 +45,8 @@
         </div>
         <hr>
         
-        <h2>Song Timelines</h2>
-        <div class="wrapper">
-            <div class="div div2">
-                {{ playlist_date_gantt }}
-            </div>
-            <div class="div div2">
-                {{ playlist_timeline }}
-            </div>
-        </div>
+        <h2>Playlists Song is In</h2>
+        {{ playlist_date_gantt }}
         <hr>
 
         <h2>Artist's Most Common Playlists & Songs</h2>
@@ -65,7 +65,7 @@
         <h2>Artist Genres</h2>
 
         {% if artist_genres[1] == False %}
-            <h2> {{ artist }} Genres: {{ artist_genres[0] }} </h2>
+            <h2> {{ artist[0] }} Genres: {{ artist_genres[0] }} </h2>
         {% endif %}
 
         {% if artist_genres[1] == True %}
@@ -74,14 +74,7 @@
             </section>
         {% endif %}
 
-        <div class="wrapper">
-            <div class="div div2">
-                {{ genres_playlist_percentiles }}
-            </div>
-            <div class="div div2">
-                {{ genres_overall_percentiles }}
-            </div>
-        </div>
+        {{ genres_overall_percentiles }}
 
 
 

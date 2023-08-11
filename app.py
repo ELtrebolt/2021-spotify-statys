@@ -5,7 +5,7 @@
 
 import pickle
 import pandas as pd
-from visualization import CurrentlyPlayingPage, AnalyzePlaylistsPage, AnalyzePlaylistPage, AnalyzeArtistPage, AnalyzeArtistsPage
+from visualization import CurrentlyPlayingPage, AnalyzePlaylistsPage, AnalyzePlaylistPage,AnalyzeArtistPage, AnalyzeArtistsPage, SingleSongPage, MyPlaylistsPage
 from SetupData import SetupData
 import datetime
 import spotipy
@@ -16,15 +16,15 @@ import tempfile
 import traceback
 from flask_caching import Cache
 from flask_session import Session
-from flask import Flask, session, request, redirect, render_template, Response, stream_with_context
+from flask import Flask, session, request, redirect, render_template, Response
 
 CLIENT_ID = '6d54b292d6dd41f5a9b2942bc0098149'
 CLIENT_SECRET = '1ab268173f1445198ba8cbce48a8ec5e'
 
 # Test Local
-# REDIRECT_URI = 'http://127.0.0.1:5000/'
+REDIRECT_URI = 'http://127.0.0.1:5000/'
 # Run Heroku
-REDIRECT_URI = 'https://spotify-statys.herokuapp.com/'
+# REDIRECT_URI = 'https://spotify-statys.herokuapp.com/'
 
 # -------------------------------Data-----------------------------------------------
 
@@ -127,6 +127,9 @@ def index():
         user_id = session['USER_ID']
         session['PATH'] = f'.data/{user_id}/'
         session['PLAYLIST_DICT'] = session['setup'].PLAYLIST_DICT
+        lookup = {value: key for key,
+                    value in session['PLAYLIST_DICT'].items()}
+        session['PLAYLIST_DICT2'] = lookup
 
         return render_template('setup.html', setup2 = "false")
 
@@ -154,6 +157,7 @@ def index():
         session['HOME_PAGE'] = _load(path, 'home_page.pkl')
         session['ABOUT_PAGE'] = _load(path, 'about_page.pkl')
         session['TOP50_PAGE'] = _load(path, 'top50_page.pkl')
+        session['PLAYLISTS_PAGE'] = _load(path, 'myplaylists_page.pkl')
 
     return redirect('/home')
 
@@ -220,10 +224,8 @@ def currently_playing():
     if not track['context'] is None and not track['context']['uri'] is None:
         playlist_id = track['context']['uri']
         playlist_id = playlist_id[playlist_id.rfind(':')+1:]
-        lookup = {value: key for key,
-                    value in session['PLAYLIST_DICT'].items()}
-        if playlist_id in lookup:
-            playlist = lookup[str(playlist_id)]
+        if playlist_id in session['PLAYLIST_DICT'].values():
+            playlist = session['PLAYLIST_DICT2'][playlist_id]
         else:
             playlist = None
     else:
@@ -274,15 +276,12 @@ def about_me():
     page = session['ABOUT_PAGE']
 
     top_genres_by_followed_artists_bar = page.load_followed_artists()
-    top_playlists_by_songs_bubble = page.load_playlists_by_songs()
 
-    top_playlists_by_artists_bubble = page.load_playlists_by_artists()
     top_songs_by_num_playlists = page.load_top_songs()
     top_artists_by_all_playlists = page.load_top_artists()
     top_albums_by_all_playlists = page.load_top_albums()
 
     return render_template('about_me.html', top_genres_by_followed_artists_bar=top_genres_by_followed_artists_bar,
-                           top_playlists_by_songs_bubble=top_playlists_by_songs_bubble, top_playlists_by_artists_bubble=top_playlists_by_artists_bubble,
                            top_songs_by_num_playlists=top_songs_by_num_playlists,
                            top_artists_by_all_playlists=top_artists_by_all_playlists,
                            top_albums_by_all_playlists=top_albums_by_all_playlists)
@@ -301,110 +300,25 @@ def top_50():
     return render_template('top_50.html', plots_by_time_range=plots_by_time_range)
 
 
-# Search Page
-@app.route('/search')
+# Search Page - don't cache otherwise will just keep search bar
+@app.route('/search', methods=['GET', 'POST'])
 def search():
     if not session['AUTH_MANAGER'].validate_token(session['CACHE_HANDLER'].get_cached_token()):
         return redirect('/')
-    return render_template('search.html')
-
-
-# Single Playlist
-def analyze_playlist(playlist_name):
-    page = AnalyzePlaylistPage(
-        playlist_name, session['ALL_SONGS_DF'], session['UNIQUE_SONGS_DF'])
-
-    timeline = page.graph_count_timeline()
-    genres = page.graph_playlist_genres()
-
-    top_artists = page.graph_top_artists()
-    top_albums = page.graph_top_albums()
-
-    features_boxplot = page.graph_song_features_boxplot()
-
-    similar_playlists = page.graph_similar_playlists()
-
-    return render_template('analyze_playlist.html', playlist_name=playlist_name,
-                           timeline=timeline, genres=genres,
-                           top_artists=top_artists, top_albums=top_albums,
-                           features_boxplot=features_boxplot,
-                           similar_playlists=similar_playlists
-                           )
-
-
-# Multiple Playlists
-def analyze_playlists(playlists):
-    page = AnalyzePlaylistsPage(
-        playlists, session['ALL_SONGS_DF'], session['UNIQUE_SONGS_DF'])
-
-    intersection = page.get_intersection_of_playlists()
-
-    boxplot = intersection[0]
-    length = intersection[1]
-    names = ', '.join(playlists)
-
-    playlist_timelines = page.graph_playlist_timelines()
-    genres = page.graph_genres_by_playlists()
-
-    return render_template('analyze_playlists.html', boxplot=boxplot, length=length, playlists=names,
-                           playlist_timelines=playlist_timelines, genres=genres
-                           )
-
-
-# Single Artist
-def analyze_artist(artist_name):
-    page = AnalyzeArtistPage(
-        artist_name, session['ALL_SONGS_DF'], session['UNIQUE_SONGS_DF'])
-
-    timeline = page.graph_count_timeline()
-    top_rank_table = page.graph_top_rank_table()
-
-    top_playlists = page.graph_top_playlists_by_artist()
-    top_songs = page.graph_top_songs_by_artist()
-
-    features_boxplot = page.graph_song_features_boxplot()
-
-    artist_genres = page.artist_genres()
-    playlists_genres = page.graph_playlists_by_artist_genres()
-
-    return render_template('analyze_artist.html', artist_name=artist_name,
-                           timeline=timeline, top_rank_table=top_rank_table,
-                           top_playlists=top_playlists, top_songs=top_songs,
-                           features_boxplot=features_boxplot,
-                           artist_genres=artist_genres,
-                           playlists_genres=playlists_genres
-                           )
-
-
-# Multiple Artists
-def analyze_artists(artists):
-    page = AnalyzeArtistsPage(
-        artists, session['ALL_SONGS_DF'], session['UNIQUE_SONGS_DF'])
-
-    artist_timelines = page.graph_artist_timelines()
-    genres = page.graph_artist_genres()
-
-    return render_template('analyze_artists.html', artists=', '.join(artists), artist_timelines=artist_timelines,
-                           genres=genres)
-
-
-# Parse Search Query and Load Proper Page
-@app.route('/analyze-search', methods=['GET', 'POST'])
-def analyze_search():
-    if not session['AUTH_MANAGER'].validate_token(session['CACHE_HANDLER'].get_cached_token()):
-        return redirect('/')
-    if request.method == 'GET':
-        return f"The URL is accessed directly. Try going to '/search' to submit form"
+    
     if request.method == 'POST':
         query = [i.strip() for i in request.form['query'].split(',')]
 
-        lowercase_playlists = {i.lower(): i
-                               for i in session['PLAYLIST_DICT'].keys()}
+        lowercase_playlists = {i.lower(): session['PLAYLIST_DICT'][i]
+                               for i in session['PLAYLIST_DICT']}
         lowercase_artists = {i.lower(): i
                              for i in session['ALL_SONGS_DF']['artist'].unique()}
+        all_song_ids = session['ALL_SONGS_DF']['id'].unique()
+
         found_list = []
         found_playlist = False
         found_artist = False
+        found_song = False
         for i in query:
             if i.lower() in lowercase_playlists:
                 found_list.append(lowercase_playlists[i])
@@ -412,22 +326,204 @@ def analyze_search():
             elif i.lower() in lowercase_artists:
                 found_list.append(lowercase_artists[i])
                 found_artist = True
+            elif i in all_song_ids:
+                found_list.append(i)
+                found_song = True
             else:
                 return 'Query not found - make sure you spelled correctly!'
 
             if found_playlist and found_artist:
-                return 'Query not found - make sure you inputted only playlists or only artists'
+                return 'Query not found - make sure you inputted only playlists or only artists or only song IDs'
 
         if found_playlist:
-            if len(found_list) == 1:
-                return analyze_playlist(found_list[0])
-            else:
-                return analyze_playlists(found_list)
+            url = '/playlists/' + '/'.join(found_list)
         elif found_artist:
-            if len(found_list) == 1:
-                return analyze_artist(found_list[0])
-            else:
-                return analyze_artists(found_list)
+            url = '/artists/' + '/'.join(found_list)
+        elif found_song:
+            url = '/songs/' + '/'.join(found_list)
+        return redirect(url)
+    
+    if request.method == 'GET':
+        print('Get')
+        return render_template('search.html')
+
+
+# Single / Multiple Playlists
+@app.route('/playlists/<path:playlist_ids>')
+@cache.cached(timeout=300)
+def analyze_playlists(playlist_ids):
+    if not session['AUTH_MANAGER'].validate_token(session['CACHE_HANDLER'].get_cached_token()):
+        return redirect('/')
+    
+    playlist_ids = playlist_ids.split('/')
+    # Single Playlist
+    if len(playlist_ids) == 1:
+        try:
+            id = playlist_ids[0]
+            playlist_name = session['PLAYLIST_DICT2'][id]
+        except:
+            return 'Playlist ID Not Found'
+        page = AnalyzePlaylistPage(
+            playlist_name, session['ALL_SONGS_DF'], session['UNIQUE_SONGS_DF'])
+
+        timeline = page.graph_count_timeline()
+        genres = page.graph_playlist_genres()
+
+        top_artists = page.graph_top_artists()
+        top_albums = page.graph_top_albums()
+
+        features_boxplot = page.graph_song_features_boxplot()
+
+        similar_playlists = page.graph_similar_playlists()
+
+        return render_template('analyze_playlist.html', playlist_name=playlist_name,
+                            timeline=timeline, genres=genres,
+                            top_artists=top_artists, top_albums=top_albums,
+                            features_boxplot=features_boxplot,
+                            similar_playlists=similar_playlists
+                            )
+    
+    # Multiple Playlists
+    elif len(playlist_ids) > 1:
+        try:
+            playlist_names = [session['PLAYLIST_DICT2'][i] for i in playlist_ids]
+        except:
+            return 'Playlist IDs not found'
+        page = AnalyzePlaylistsPage(
+            playlist_names, session['ALL_SONGS_DF'], session['UNIQUE_SONGS_DF'])
+
+        boxplots = page.graph_playlists_boxplots()
+
+        boxplot = boxplots[0]
+        length = boxplots[1]
+        names = ', '.join(playlist_names)
+
+        playlist_timelines = page.graph_playlist_timelines()
+        genres = page.graph_genres_by_playlists()
+
+        artists = page.graph_artists_by_playlists()
+
+        return render_template('analyze_playlists.html', boxplot=boxplot, length=length, playlists=names,
+                            playlist_timelines=playlist_timelines, genres=genres, artists=artists
+                            )
+
+
+# Single / Multiple Artists
+@app.route('/artists/<path:artist_names>')
+@cache.cached(timeout=300)
+def analyze_artists(artist_names):
+    if not session['AUTH_MANAGER'].validate_token(session['CACHE_HANDLER'].get_cached_token()):
+        return redirect('/')
+    
+    artist_names = artist_names.split('/')
+    # Single Artist
+    if len(artist_names) == 1:
+        artist_name = artist_names[0]
+        page = AnalyzeArtistPage(
+            artist_name, session['ALL_SONGS_DF'], session['UNIQUE_SONGS_DF'])
+
+        timeline = page.graph_count_timeline()
+        top_rank_table = page.graph_top_rank_table()
+
+        top_playlists = page.graph_top_playlists_by_artist()
+        top_songs = page.graph_top_songs_by_artist()
+
+        features_boxplot = page.graph_song_features_boxplot()
+
+        artist_genres = page.artist_genres()
+        playlists_genres = page.graph_playlists_by_artist_genres()
+
+        return render_template('analyze_artist.html', artist_name=artist_name,
+                            timeline=timeline, top_rank_table=top_rank_table,
+                            top_playlists=top_playlists, top_songs=top_songs,
+                            features_boxplot=features_boxplot,
+                            artist_genres=artist_genres,
+                            playlists_genres=playlists_genres
+                            )
+
+    # Multiple Artists
+    elif len(artist_names) > 1:
+        page = AnalyzeArtistsPage(
+            artist_names, session['ALL_SONGS_DF'], session['UNIQUE_SONGS_DF'])
+
+        artist_timelines = page.graph_artist_timelines()
+        genres = page.graph_artist_genres()
+
+        top_ranks = page.graph_top_rank_table()
+        top_playlists = page.graph_playlists_by_artists()
+        
+        audio_features = page.graph_artists_boxplots()
+
+        return render_template('analyze_artists.html', artists=', '.join(artist_names), artist_timelines=artist_timelines,
+                           genres=genres, top_ranks=top_ranks, top_playlists=top_playlists,
+                           audio_features=audio_features)
+    
+
+# Single / Multiple Songs
+@app.route('/songs/<path:song_ids>')
+@cache.cached(timeout=300)
+def analyze_songs(song_ids):
+    if not session['AUTH_MANAGER'].validate_token(session['CACHE_HANDLER'].get_cached_token()):
+        return redirect('/')
+    
+    song_ids = song_ids.split('/')
+    # Single Song = 1ytsxlw6P6gsCc3RrYweyj, 6FE2iI43OZnszFLuLtvvmg, 0peSmoFiYGaCkHibhLBGq2
+    if len(song_ids) == 1:
+        song_id = song_ids[0]
+        page = SingleSongPage(
+            song_id, session['ALL_SONGS_DF'], session['UNIQUE_SONGS_DF'])
+        song = page.get_song()
+        artist = page.get_artist().split(', ')
+
+        top_rank_table = page.graph_top_rank_table()
+
+        song_features_radar = page.graph_song_features_vs_avg()
+        song_features_percentiles_bar = page.graph_song_percentiles_vs_avg()
+
+        playlist_date_gantt = page.graph_date_added_to_playlist()
+
+        artist_top_graphs = page.graph_all_artists()
+
+        artist_genres = page.graph_artist_genres()
+        genres_overall_percentiles = page.graph_song_genres_vs_avg()
+
+        return render_template('single_song.html', song=song, artist=artist, 
+                                top_rank_table=top_rank_table,
+                                song_features_radar=song_features_radar, song_features_percentiles_bar=song_features_percentiles_bar,
+                                playlist_date_gantt=playlist_date_gantt,
+                                artist_top_graphs=artist_top_graphs,
+                                artist_genres=artist_genres, genres_overall_percentiles=genres_overall_percentiles
+                                )
+
+    # Multiple Artists
+    elif len(song_ids) > 1:
+        pass
+
+
+# My Playlists Page
+@app.route('/my-playlists')
+@cache.cached(timeout=300)
+def my_playlists():
+    if not session['AUTH_MANAGER'].validate_token(session['CACHE_HANDLER'].get_cached_token()):
+        return redirect('/')
+
+    page = session['PLAYLISTS_PAGE']
+
+    playlists_by_length = page.load_playlists_by_length()
+    playlists_by_explicit = page.load_playlists_by_explicit()
+
+    avg_boxplot = page.load_avg_boxplot()
+    first_last_added = page.load_first_last_added()
+
+    top_playlists_by_songs = page.load_playlists_by_songs()
+    top_playlists_by_artists = page.load_playlists_by_artists()
+
+    return render_template('my_playlists.html', playlists_by_length=playlists_by_length,
+                           playlists_by_explicit=playlists_by_explicit,
+                           avg_boxplot=avg_boxplot,
+                           first_last_added=first_last_added,
+                           top_playlists_by_songs=top_playlists_by_songs,
+                           top_playlists_by_artists=top_playlists_by_artists)
 
 # -------------------------------Main Method-----------------------------------------------
 

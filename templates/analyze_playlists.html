@@ -23,19 +23,23 @@
     <hr>
 
     <body>
-        <h2>Playlist Intersection</h2>
+        <h2>Playlists' Audio Features</h2>
         <h3>There are {{ length }} songs that intersect these playlists</h3>
         {% if length > 0 %}
             {{ boxplot }}
         {% endif %}
         <hr>
 
-        <h2>Playlist Timelines</h2>
+        <h2>Playlists' Timelines</h2>
         {{ playlist_timelines }}
         <hr>
 
         <h2>Playlists' Genres</h2>
         {{ genres }}
+        <hr>
+
+        <h2>Playlists' Artists</h2>
+        {{ artists }}
         <hr>
     </body>
 

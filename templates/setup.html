@@ -14,6 +14,7 @@
             data = JSON.stringify(event.data);
             if(data.includes("REDIRECT_URI="))
             {
+                eventSource.close();
                 window.location.href = event.data.split('=')[1];
             }
             else
@@ -35,7 +36,10 @@
             var eventSource = new EventSource('/setup_2');
         }
         eventSource.onmessage = handleStreamData;
-
+        eventSource.onerror = error => {
+            console.error('EventSource failed:', error);
+            eventSource.close();
+        };
     </script>
 </body>
 </html>
