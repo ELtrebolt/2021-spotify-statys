@@ -7,9 +7,9 @@ from visualization import HomePage, AboutPage, Top50Page, MyPlaylistsPage
 import traceback
 
 # Test Local
-REDIRECT_URI = 'http://127.0.0.1:5000/'
+# REDIRECT_URI = 'http://127.0.0.1:5000/'
 # Run Heroku
-# REDIRECT_URI = 'https://spotify-statys.herokuapp.com/'
+REDIRECT_URI = 'https://spotify-statys.herokuapp.com/'
 PERCENTILE_COLS = ['popularity', 'danceability', 'energy', 'loudness', 'speechiness',
                    'acousticness', 'instrumentalness', 'liveness', 'valence', 'tempo', 'duration']
 
@@ -195,7 +195,6 @@ class SetupData():
         UNIQUE_SONGS_DF['num_playlists'] = [
             len(i) for i in UNIQUE_SONGS_DF['playlist']]
 
-        UNIQUE_SONGS_DF.to_csv('unique_songs_df.csv')
         UNIQUE_SONGS_DF.to_pickle(f"{self.path}unique_songs_df.pkl")
 
 

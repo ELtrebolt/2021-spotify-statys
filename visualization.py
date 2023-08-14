@@ -1319,18 +1319,14 @@ class Top50Page():
         x_data = FEATURE_COLS
         y_data = []
 
-        rank_col = 'artists_' + TIME_RANGE_DICT[time_range][1]
-        mask = self._unique_songs_df[rank_col].apply(lambda x: type(x) == int)
-        df = self._unique_songs_df[mask]
-        df['popularity'] = df['popularity']/100
-
         dicty = defaultdict(list)
         artists = self._top_artists[time_range]
         for c in FEATURE_COLS:
             for a in artists:
-                mask = df['artist'].apply(lambda x: a in x.split(', '))
-                df2 = df[mask]
-                dicty[c].append(df2[c].median())
+                df = self._unique_songs_df[self._unique_songs_df['artist'].apply(
+                    lambda x: a in x.split(', '))]
+                df['popularity'] = df['popularity']/100
+                dicty[c].append(df[c].median())
 
         y_data = list(dicty.values())
 
@@ -2103,8 +2099,8 @@ class MyPlaylistsPage():
             dicty = self._top_songs[time_range]
             playlist_dict = defaultdict(int)
             for name, playlist in zip(ALL_SONGS_DF['name'], ALL_SONGS_DF['playlist']):
-                    if name in dicty.keys():
-                        playlist_dict[playlist] += 1
+                if name in dicty.keys():
+                    playlist_dict[playlist] += 1
 
             final.append(playlist_dict)
             
