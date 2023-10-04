@@ -7,9 +7,9 @@ from visualization import HomePage, AboutPage, Top50Page, MyPlaylistsPage
 import traceback
 
 # Test Local
-# REDIRECT_URI = 'http://127.0.0.1:5000/'
+REDIRECT_URI = 'http://127.0.0.1:5000/'
 # Run Heroku
-REDIRECT_URI = 'https://spotify-statys.herokuapp.com/'
+# REDIRECT_URI = 'https://spotify-statys.herokuapp.com/'
 PERCENTILE_COLS = ['popularity', 'danceability', 'energy', 'loudness', 'speechiness',
                    'acousticness', 'instrumentalness', 'liveness', 'valence', 'tempo', 'duration']
 
@@ -113,19 +113,22 @@ class SetupData():
 
         song_meta_df = pd.DataFrame.from_dict(song_meta)
 
+        # Doesn't work for podcasts / non-songs
+        try:
+            features = self.SP.audio_features(song_meta['id'])
+            features_df = pd.DataFrame.from_dict(features)
 
-        features = self.SP.audio_features(song_meta['id'])
-        features_df = pd.DataFrame.from_dict(features)
+            # convert milliseconds to mins
+            # duration_ms: The duration of the track in milliseconds.
+            # 1 minute = 60 seconds = 60 × 1000 milliseconds = 60,000 ms
+            features_df['duration'] = features_df['duration_ms']/1000
+            features_df.drop(columns='duration_ms', inplace=True)
 
-        # convert milliseconds to mins
-        # duration_ms: The duration of the track in milliseconds.
-        # 1 minute = 60 seconds = 60 × 1000 milliseconds = 60,000 ms
-        features_df['duration'] = features_df['duration_ms']/1000
-        features_df.drop(columns='duration_ms', inplace=True)
+            final_df = song_meta_df.merge(features_df)
 
-        final_df = song_meta_df.merge(features_df)
-
-        return final_df
+            return final_df
+        except:
+            return song_meta_df
 
 
     # Get all of a playlists songs
@@ -133,7 +136,7 @@ class SetupData():
         df = pd.DataFrame()
 
         try:
-            results = self.SP.playlist(_id, fields='tracks,next')
+            results = self.SPOTIFY.playlist(_id, fields='tracks,next')
         except:
             return 'data:ERROR=' + traceback.format_exc().replace('\n', '<br>') + '\n\n'
         
@@ -141,7 +144,7 @@ class SetupData():
         df = pd.concat([df, self._get_100_songs(tracks, name)])
 
         while tracks['next']:
-            tracks = self.SP.next(tracks)
+            tracks = self.SPOTIFY.next(tracks)
             df = pd.concat([df, self._get_100_songs(tracks, name)])
 
         return df.reset_index()
@@ -301,11 +304,11 @@ class SetupData():
             for i in df['artist_ids']:
                 song_genres = []
                 for j in i.split(', '):
-                    # try:
-                    song_genres.append(genres_dict[j])
-                    # except Exception as e:
-                    #     yield f'data:No Artist Id Found<br>\n\n\n'
-                    #     song_genres.append('N/A')
+                    try:
+                        song_genres.append(genres_dict[j])
+                    except Exception as e:
+                        yield f'data:No Artist Id Found{j}<br>\n\n\n'
+                        song_genres.append('N/A')
                 genres_list.append(song_genres)
             df['genres'] = genres_list
 
