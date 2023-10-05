@@ -7,9 +7,9 @@ from visualization import HomePage, AboutPage, Top50Page, MyPlaylistsPage
 import traceback
 
 # Test Local
-# REDIRECT_URI = 'http://127.0.0.1:5000/'
+REDIRECT_URI = 'http://127.0.0.1:5000/'
 # Run Heroku
-REDIRECT_URI = 'https://spotify-statys.herokuapp.com/'
+# REDIRECT_URI = 'https://spotify-statys.herokuapp.com/'
 PERCENTILE_COLS = ['popularity', 'danceability', 'energy', 'loudness', 'speechiness',
                    'acousticness', 'instrumentalness', 'liveness', 'valence', 'tempo', 'duration']
 
@@ -113,22 +113,28 @@ class SetupData():
 
         song_meta_df = pd.DataFrame.from_dict(song_meta)
 
-        # Doesn't work for podcasts / non-songs
-        try:
-            features = self.SP.audio_features(song_meta['id'])
-            features_df = pd.DataFrame.from_dict(features)
+        features = self.SP.audio_features(song_meta['id'])
+        # Song Features = None for podcast episodes like Greendale Is Where I Belong
+        if None in features:
+            features2 = []
+            for i,j in enumerate(features):
+                if j is None:
+                    song_meta_df.drop([i], inplace=True)
+                else:
+                    features2.append(j)
+        else:
+            features2 = features
+        features_df = pd.DataFrame.from_dict(features2)
 
-            # convert milliseconds to mins
-            # duration_ms: The duration of the track in milliseconds.
-            # 1 minute = 60 seconds = 60 × 1000 milliseconds = 60,000 ms
-            features_df['duration'] = features_df['duration_ms']/1000
-            features_df.drop(columns='duration_ms', inplace=True)
+        # convert milliseconds to mins
+        # duration_ms: The duration of the track in milliseconds.
+        # 1 minute = 60 seconds = 60 × 1000 milliseconds = 60,000 ms
+        features_df['duration'] = features_df['duration_ms']/1000
+        features_df.drop(columns='duration_ms', inplace=True)
 
-            final_df = song_meta_df.merge(features_df)
+        final_df = song_meta_df.merge(features_df)
 
-            return final_df
-        except:
-            return song_meta_df
+        return final_df
 
 
     # Get all of a playlists songs
@@ -286,8 +292,8 @@ class SetupData():
         unique_artist_ids = list(unique_artist_ids)
 
         # Getting 50 artists at a time is a LOT faster than getting 1 artist at a time
-        for i in range(0, total, 40):
-            listy = self.SP.artists(unique_artist_ids[i:i+40])
+        for i in range(0, total, 50):
+            listy = self.SP.artists(unique_artist_ids[i:i+50])
             for a in listy['artists']:
                 try:
                     g = a['genres']
@@ -304,11 +310,12 @@ class SetupData():
             for i in df['artist_ids']:
                 song_genres = []
                 for j in i.split(', '):
-                    try:
-                        song_genres.append(genres_dict[j])
-                    except Exception as e:
-                        yield f'data:No Artist Id Found{j}<br>\n\n\n'
-                        song_genres.append('N/A')
+                    # try:
+                    song_genres.append(genres_dict[j])
+                    # except Exception as e:
+                    #    print(j, e)
+                    #    yield f'data:No Artist Id Found{j}<br>\n\n\n'
+                    #    song_genres.append('N/A')
                 genres_list.append(song_genres)
             df['genres'] = genres_list
 
