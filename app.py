@@ -344,7 +344,6 @@ def search():
         return redirect(url)
     
     if request.method == 'GET':
-        print('Get')
         return render_template('search.html')
 
 

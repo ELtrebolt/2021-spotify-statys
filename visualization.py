@@ -32,12 +32,16 @@ FEATURE_COLS = ['popularity', 'danceability', 'energy', 'speechiness', 'acoustic
                 'instrumentalness', 'liveness', 'valence']
 OTHER_COLS = ['loudness', 'tempo', 'duration']
 LABEL_CUTOFF_LENGTH = 25
+MAX_LIST_SIZE = 10
 TIME_RANGE_DICT = {0: ['Last 4 Weeks', 'short_rank'], 1: [
     'Last 6 Months', 'med_rank'], 2: ['All Time', 'long_rank']}
 COLORS = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A',
           '#19D3F3', '#FF6692', '#B6E880', '#FF97FF', '#FECB52']
 
 # Helper Functions -----------------------------------------------------------------------------------------
+
+def _shorten_names(listy):
+    return [i if len(i) < LABEL_CUTOFF_LENGTH else i[:LABEL_CUTOFF_LENGTH] + '...' for i in listy]
 
 def _h_bar(series, title=None, xaxis=None, yaxis=None, percents=False,
            long_names=False, hovertext=None, to_html=True, name=None, color=None, markup=True):
@@ -47,8 +51,7 @@ def _h_bar(series, title=None, xaxis=None, yaxis=None, percents=False,
         texty = series
 
     if long_names:
-        y_labels = [i if len(
-            i) < LABEL_CUTOFF_LENGTH else i[:LABEL_CUTOFF_LENGTH] + '...' for i in series.keys()]
+        y_labels = _shorten_names(series.keys())
     else:
         y_labels = series.keys()
 
@@ -1202,41 +1205,29 @@ class AnalyzePlaylistPage():
                       hovertext=[genres[i] + ' Songs' for i in relative])
 
     def graph_top_artists(self, top_n=10):
-        df = self._playlist_df
+        df = self._playlist_df.copy()
 
-        dicty = defaultdict(int)
-        for i in df['artist']:
-            for j in i.split(', '):
-                dicty[j] += 1
+        df['artist'] = df['artist'].str.split(',')
+        df_exploded = df.explode('artist')
+        grouped = df_exploded.groupby('artist')['name'].agg(list)
 
-        total = len(df.index)
-        relative = {k: str(round(v/total*100, 2)) for k, v in dicty.items()}
-        dicty = {k: v for k, v in sorted(
-            dicty.items(), key=lambda x: x[1], reverse=True)[:10]}
+        sorted_dict = dict(sorted(grouped.items(), key=lambda x: len(x[1]), reverse=True)[:top_n])
+        series = pd.Series({i:len(j) for i,j in sorted_dict.items()})
 
         title = 'Most Common Artists For Playlist: ' + self._playlist
-
-        series = pd.Series(dicty)
         return _h_bar(series, title=title, yaxis='Artist', xaxis='Number of Songs', long_names=True,
-                      hovertext=[relative[i] + '% of Playlist' for i in dicty])
+                       hovertext=['<br>'.join(_shorten_names(i)) for i in sorted_dict.values()])
 
     def graph_top_albums(self, top_n=10):
         df = self._playlist_df
 
-        dicty = defaultdict(int)
-        for i in df['album']:
-            dicty[i] += 1
-
-        total = len(df.index)
-        relative = {k: str(round(v/total*100, 2)) for k, v in dicty.items()}
-        dicty = {k: v for k, v in sorted(
-            dicty.items(), key=lambda x: x[1], reverse=True)[:10]}
+        grouped = df.groupby('album')['name'].agg(list)
+        sorted_dict = dict(sorted(grouped.items(), key=lambda x: len(x[1]), reverse=True)[:top_n])
+        series = pd.Series({i:len(j) for i,j in sorted_dict.items()})
 
         title = 'Most Common Albums For Playlist: ' + self._playlist
-
-        series = pd.Series(dicty)
         return _h_bar(series, title=title, yaxis='Album', xaxis='Number of Songs', long_names=True,
-                      hovertext=[relative[i] + '% of Playlist' for i in dicty])
+                       hovertext=['<br>'.join(_shorten_names(i)) for i in sorted_dict.values()])
 
     def graph_similar_playlists(self, top_n=10):
         UNIQUE_SONGS_DF = self._unique_songs_df
@@ -1367,7 +1358,7 @@ class Top50Page():
             num_by_genre[g] = len(df2.index)
 
             df2 = df2.sort_values(by=rank_col)
-            df2 = df2.head()
+            # df2 = df2.head()  # only keep top 5 in hovertext
             if artists:
                 top_by_genre[g] = list(zip(df2['artist'], df2[rank_col]))
             else:

@@ -67,8 +67,11 @@ class SetupData():
     def _get_100_songs(self, tracks, playlist):
 
         # Empty Playlist
-        if len(tracks['items']) == 0:
-            return pd.DataFrame()
+        try:
+            if len(tracks['items']) == 0:
+                return pd.DataFrame()
+        except Exception:
+            print(tracks)
 
         song_meta = {'id': [], 'name': [],
                      'artist': [], 'album': [], 'explicit': [], 'popularity': [],
