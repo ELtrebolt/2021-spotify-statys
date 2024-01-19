@@ -32,7 +32,7 @@ FEATURE_COLS = ['popularity', 'danceability', 'energy', 'speechiness', 'acoustic
                 'instrumentalness', 'liveness', 'valence']
 OTHER_COLS = ['loudness', 'tempo', 'duration']
 LABEL_CUTOFF_LENGTH = 25
-MAX_LIST_SIZE = 10
+MAX_HOVER_ROWS = 20
 TIME_RANGE_DICT = {0: ['Last 4 Weeks', 'short_rank'], 1: [
     'Last 6 Months', 'med_rank'], 2: ['All Time', 'long_rank']}
 COLORS = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A',
@@ -41,7 +41,7 @@ COLORS = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A',
 # Helper Functions -----------------------------------------------------------------------------------------
 
 def _shorten_names(listy):
-    return [i if len(i) < LABEL_CUTOFF_LENGTH else i[:LABEL_CUTOFF_LENGTH] + '...' for i in listy]
+    return [i if len(i) < LABEL_CUTOFF_LENGTH else i[:LABEL_CUTOFF_LENGTH] + '...' for i in listy[:MAX_HOVER_ROWS]]
 
 def _h_bar(series, title=None, xaxis=None, yaxis=None, percents=False,
            long_names=False, hovertext=None, to_html=True, name=None, color=None, markup=True):
@@ -1146,7 +1146,7 @@ class AnalyzePlaylistsPage():
                 if len(counts[a]) < num:
                     counts[a].append(0)
                 counts[a].append(len(adf))
-                songs[(p,a)] = '<br>'.join(adf['name'])
+                songs[(p,a)] = '<br>'.join(adf['name'][:MAX_HOVER_ROWS])
             for i in counts:
                 if len(counts[i]) < num:
                     counts[i].append(0)
