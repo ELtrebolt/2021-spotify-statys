@@ -5,6 +5,7 @@ import pickle
 from collections import defaultdict
 import datetime
 from re import A
+import numpy as np
 import pandas as pd
 from flask import Markup
 from matplotlib_venn import venn3
@@ -32,7 +33,7 @@ FEATURE_COLS = ['popularity', 'danceability', 'energy', 'speechiness', 'acoustic
                 'instrumentalness', 'liveness', 'valence']
 OTHER_COLS = ['loudness', 'tempo', 'duration']
 LABEL_CUTOFF_LENGTH = 25
-MAX_HOVER_ROWS = 20
+MAX_HOVER_ROWS = 10
 TIME_RANGE_DICT = {0: ['Last 4 Weeks', 'short_rank'], 1: [
     'Last 6 Months', 'med_rank'], 2: ['All Time', 'long_rank']}
 COLORS = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A',
@@ -453,7 +454,7 @@ def shared_graph_top_playlists_by_artist(ALL_SONGS_DF, artist_name):
 
     return _h_bar(series, title='Most Common Playlists For Artist: ' + artist_name,
                   xaxis='Number of Artist Songs in the Playlist', 
-                  hovertext=df.sort_values(by='playlist', key=lambda x: x.map(series))['name']
+                  hovertext=df.sort_values(by='playlist', key=lambda x: x.map(series)).head(MAX_HOVER_ROWS)['name']
                   )
 
 
@@ -1358,7 +1359,7 @@ class Top50Page():
             num_by_genre[g] = len(df2.index)
 
             df2 = df2.sort_values(by=rank_col)
-            # df2 = df2.head()  # only keep top 5 in hovertext
+            df2 = df2.head(MAX_HOVER_ROWS)  # only keep top in hovertext
             if artists:
                 top_by_genre[g] = list(zip(df2['artist'], df2[rank_col]))
             else:
@@ -1716,7 +1717,7 @@ class AnalyzeArtistsPage():
             for p in self._all_songs_df['playlist'].unique():
                 adf = df[df['playlist'] == p]
                 counts[p].append(len(adf))
-                songs[p].append('<br>'.join(adf['name']))
+                songs[p].append('<br>'.join(adf.head(MAX_HOVER_ROWS)['name']))
 
         for i in counts:
             counts[i].append(sum(counts[i]))
@@ -2018,7 +2019,8 @@ class MyPlaylistsPage():
     def _graph_num_songs_histogram(self):
         df = self._all_songs_df['playlist'].value_counts().reset_index()
         fig = px.histogram(df, title="Playlists by # of Songs", marginal="rug",
-                        hover_data='playlist')
+                       hover_data='playlist')
+
         return fig
 
     def _graph_duration_histogram(self):

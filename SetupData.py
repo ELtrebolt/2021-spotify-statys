@@ -70,8 +70,9 @@ class SetupData():
         try:
             if len(tracks['items']) == 0:
                 return pd.DataFrame()
-        except Exception:
-            print(tracks)
+        except KeyError as e:
+            # when this happens that means tracks = {'next':None}
+            return pd.DataFrame()
 
         song_meta = {'id': [], 'name': [],
                      'artist': [], 'album': [], 'explicit': [], 'popularity': [],
@@ -83,6 +84,10 @@ class SetupData():
             # For Bernardo and Adam, this was the error - meta was None
             # For Beni meta['id'] was None due to Kanye West leaked unrelease - Spread Your Wings & Flowers
             if meta is not None and meta['id'] is not None:
+                # For special cases like the podcast 'greendale is where i belong'
+                if meta['type'] == 'episode':
+                    # print('Episode Found:', meta['name'])
+                    continue
 
                 song_meta['id'].append(meta['id'])
 
@@ -90,7 +95,8 @@ class SetupData():
                 song_meta['name'].append(song)
 
                 artist = ', '.join([singer['name']
-                                   for singer in meta['artists']])
+                                    for singer in meta['artists']])
+
                 song_meta['artist'].append(artist)
 
                 artist_ids = ', '.join(filter(None, [singer['id'] if singer else ''
@@ -152,9 +158,16 @@ class SetupData():
         tracks = results['tracks']
         df = pd.concat([df, self._get_100_songs(tracks, name)])
 
+        offset = len(tracks['items'])
         while tracks['next']:
+            # previous issue with tracks = {'next': url} and doesn't have items
+            # now have to use playlist_items and offset
+            items = self.SPOTIFY.playlist_items(_id, offset=offset)
+            df = pd.concat([df, self._get_100_songs(items, name)])
+
             tracks = self.SPOTIFY.next(tracks)
-            df = pd.concat([df, self._get_100_songs(tracks, name)])
+            offset += len(items['items'])
+            # print(name, offset)
 
         return df.reset_index()
 
@@ -173,7 +186,10 @@ class SetupData():
                     yield df
                 else:
                     ALL_SONGS_DF = pd.concat([ALL_SONGS_DF, df])
-                    yield 'data:' + name + '   ' + str(count) + '/' + str(total) + '<br/>\n\n\n'
+                    yield 'data:' + name + ' --> ' + str(count) + '/' + str(total) + '<br/>\n\n\n'
+                    if len(ALL_SONGS_DF) > 8888:
+                        yield 'data:***Total Song Count Reached Max Limit***<br/>\n\n\n'
+                        break
                 count += 1
 
             # Yung Yi had the problem of 'index' not found in axis
@@ -313,6 +329,7 @@ class SetupData():
             for i in df['artist_ids']:
                 song_genres = []
                 for j in i.split(', '):
+                    # Potential error here? ufo ufo does not have la pop as a genre
                     # try:
                     song_genres.append(genres_dict[j])
                     # except Exception as e:
@@ -364,12 +381,12 @@ class SetupData():
                 self.path, ALL_SONGS_DF, UNIQUE_SONGS_DF, artists)
             _dump(f'{self.path}about_page.pkl', about_page)
 
-            yield f'data:Setting up Top50 Page...9/{total}<br>\n\n\n'
+            yield f'data:Setting Up Top50 Page...9/{total}<br>\n\n\n'
             top50_page = Top50Page(
                 self.path, UNIQUE_SONGS_DF, top_artists)
             _dump(f'{self.path}top50_page.pkl', top50_page)
 
-            yield f'data:Setting up My Playlists Page...10/{total}<br>\n\n\n'
+            yield f'data:Setting Up My Playlists Page...10/{total}<br>\n\n\n'
             myplaylists_page = MyPlaylistsPage(
                 self.path, ALL_SONGS_DF, top_artists, top_songs)
             _dump(f'{self.path}myplaylists_page.pkl', myplaylists_page)
