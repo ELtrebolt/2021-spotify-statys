@@ -151,22 +151,19 @@ class SetupData():
         df = pd.DataFrame()
 
         try:
-            results = self.SPOTIFY.playlist(_id, fields='tracks,next')
+            tracks = self.SPOTIFY.playlist_items(_id, offset=0)
         except:
             return 'data:ERROR=' + traceback.format_exc().replace('\n', '<br>') + '\n\n'
         
-        tracks = results['tracks']
         df = pd.concat([df, self._get_100_songs(tracks, name)])
 
         offset = len(tracks['items'])
         while tracks['next']:
             # issue with getting more than 100 tracks = {'next': url}, doesn't have items
-            # now have to use playlist_tracks and offset
-            items = self.SP.playlist_items(_id, offset=offset)
-            df = pd.concat([df, self._get_100_songs(items, name)])
-
-            tracks = self.SP.next(tracks)
-            offset += len(items['items'])
+            # now have to use playlist_tracks and offset instead of self.SPOTIFY.next(tracks)
+            tracks = self.SPOTIFY.playlist_items(_id, offset=offset)
+            df = pd.concat([df, self._get_100_songs(tracks, name)])
+            offset += len(tracks['items'])
             # print(name, offset)
 
         return df.reset_index()
