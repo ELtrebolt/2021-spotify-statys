@@ -160,12 +160,12 @@ class SetupData():
 
         offset = len(tracks['items'])
         while tracks['next']:
-            # previous issue with tracks = {'next': url} and doesn't have items
-            # now have to use playlist_items and offset
-            items = self.SPOTIFY.playlist_items(_id, offset=offset)
+            # issue with getting more than 100 tracks = {'next': url}, doesn't have items
+            # now have to use playlist_tracks and offset
+            items = self.SP.playlist_items(_id, offset=offset)
             df = pd.concat([df, self._get_100_songs(items, name)])
 
-            tracks = self.SPOTIFY.next(tracks)
+            tracks = self.SP.next(tracks)
             offset += len(items['items'])
             # print(name, offset)
 
@@ -364,6 +364,7 @@ class SetupData():
             yield f'data:Adding Top Songs Rank...5/{total}<br>\n\n\n'
             self._add_top_songs_rank()
 
+            # Takes a while
             yield f'data:Getting Artist Genres...6/{total}<br>\n\n\n'
             self._add_genres()
 
@@ -381,6 +382,7 @@ class SetupData():
                 self.path, ALL_SONGS_DF, UNIQUE_SONGS_DF, artists)
             _dump(f'{self.path}about_page.pkl', about_page)
 
+            # Takes a while
             yield f'data:Setting Up Top50 Page...9/{total}<br>\n\n\n'
             top50_page = Top50Page(
                 self.path, UNIQUE_SONGS_DF, top_artists)

@@ -38,7 +38,6 @@
         eventSource.onmessage = handleStreamData;
         eventSource.onerror = error => {
             console.error('EventSource failed:', error);
-            eventSource.close();
         };
     </script>
 </body>
