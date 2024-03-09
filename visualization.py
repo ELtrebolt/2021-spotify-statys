@@ -34,6 +34,7 @@ FEATURE_COLS = ['popularity', 'danceability', 'energy', 'speechiness', 'acoustic
 OTHER_COLS = ['loudness', 'tempo', 'duration']
 LABEL_CUTOFF_LENGTH = 25
 MAX_HOVER_ROWS = 10
+MAX_HBARS = 10
 TIME_RANGE_DICT = {0: ['Last 4 Weeks', 'short_rank'], 1: [
     'Last 6 Months', 'med_rank'], 2: ['All Time', 'long_rank']}
 COLORS = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A',
@@ -46,6 +47,7 @@ def _shorten_names(listy):
 
 def _h_bar(series, title=None, xaxis=None, yaxis=None, percents=False,
            long_names=False, hovertext=None, to_html=True, name=None, color=None, markup=True):
+    # Series and Hovertext should be cut off before calling function
     if percents:
         texty = [str(round(i, 2)) + '%' for i in series]
     else:
@@ -449,12 +451,14 @@ def shared_graph_top_playlists_by_artist(ALL_SONGS_DF, artist_name):
     mask = ALL_SONGS_DF['artist'].apply(lambda x: artist_name in x.split(', '))
     df = ALL_SONGS_DF[mask]
 
-    series = df['playlist'].value_counts(ascending=True)
-    df = df.groupby(['playlist'], as_index=False)[['name']].agg(lambda x: '<br>'.join(x))
+    series = df['playlist'].value_counts(ascending=False).head(MAX_HBARS)
+    df = df.groupby(['playlist'], as_index=False)[['name']].agg(lambda x: '<br>'.join(x.head(MAX_HOVER_ROWS)))
+    df['playlist'] = pd.Categorical(df['playlist'], categories=series.keys(), ordered=True)
+    df = df[df['playlist'].isin(series.keys())].sort_values('playlist')
 
     return _h_bar(series, title='Most Common Playlists For Artist: ' + artist_name,
                   xaxis='Number of Artist Songs in the Playlist', 
-                  hovertext=df.sort_values(by='playlist', key=lambda x: x.map(series)).head(MAX_HOVER_ROWS)['name']
+                  hovertext=df['name']
                   )
 
 
