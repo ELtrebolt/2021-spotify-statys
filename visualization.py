@@ -34,6 +34,7 @@ FEATURE_COLS = ['popularity', 'danceability', 'energy', 'speechiness', 'acoustic
 OTHER_COLS = ['loudness', 'tempo', 'duration']
 LABEL_CUTOFF_LENGTH = 25
 MAX_HOVER_ROWS = 10
+MAX_HBARS = 10
 TIME_RANGE_DICT = {0: ['Last 4 Weeks', 'short_rank'], 1: [
     'Last 6 Months', 'med_rank'], 2: ['All Time', 'long_rank']}
 COLORS = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A',
