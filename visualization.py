@@ -38,6 +38,7 @@ TIME_RANGE_DICT = {0: ['Last 4 Weeks', 'short_rank'], 1: [
     'Last 6 Months', 'med_rank'], 2: ['All Time', 'long_rank']}
 COLORS = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A',
           '#19D3F3', '#FF6692', '#B6E880', '#FF97FF', '#FECB52']
+TOP_RANK_TABLE_MIN_HEIGHT = 300
 
 # Helper Functions -----------------------------------------------------------------------------------------
 
@@ -45,7 +46,7 @@ def _shorten_names(listy):
     return [i if len(i) < LABEL_CUTOFF_LENGTH else i[:LABEL_CUTOFF_LENGTH] + '...' for i in listy[:MAX_HOVER_ROWS]]
 
 def _h_bar(series, title=None, xaxis=None, yaxis=None, percents=False,
-           long_names=False, hovertext=None, to_html=True, name=None, color=None, markup=True):
+           long_names=False, hovertext=None, to_html=True, name=None, color=None, markup=True, fixHeight=False):
     if percents:
         texty = [str(round(i, 2)) + '%' for i in series]
     else:
@@ -77,7 +78,10 @@ def _h_bar(series, title=None, xaxis=None, yaxis=None, percents=False,
         if yaxis:
             fig.update_layout(yaxis_title=yaxis)
 
-        fig.update_layout(yaxis={'categoryorder': 'total ascending'})
+        if fixHeight:
+            fig.update_layout(yaxis={'categoryorder': 'total ascending'}, height=min(max((len(series)+1)*50, 300), 500))
+        else:
+            fig.update_layout(yaxis={'categoryorder': 'total ascending'})
         fig.update_yaxes(automargin=True)
 
         if markup:
@@ -137,8 +141,8 @@ def _venn_diagram_artist_genres(artists, genres):
 
         img = BytesIO()
 
-        plt.rcParams.update({'font.size': 18})
-        plt.figure(figsize=(18, 10))
+        plt.rcParams.update({'font.size': 14})
+        plt.figure(figsize=(10, 3.5))
 
         fig = venn2([left, right], tuple(artists))
         bubbles = ['10', '01', '11']
@@ -149,7 +153,7 @@ def _venn_diagram_artist_genres(artists, genres):
             except:
                 pass
         for text in fig.set_labels:
-            text.set_fontsize(18)
+            text.set_fontsize(14)
 
         # Save it to a temporary buffer
         plt.savefig(img, format='png')
@@ -167,8 +171,8 @@ def _venn_diagram_artist_genres(artists, genres):
 
         img = BytesIO()
 
-        plt.rcParams.update({'font.size': 18})
-        plt.figure(figsize=(18, 10))
+        plt.rcParams.update({'font.size': 14})
+        plt.figure(figsize=(10, 6))
 
         fig = venn3([first, second, third],
                     set_labels=tuple(artists))
@@ -450,11 +454,11 @@ def shared_graph_top_playlists_by_artist(ALL_SONGS_DF, artist_name):
     df = ALL_SONGS_DF[mask]
 
     series = df['playlist'].value_counts(ascending=True)
-    df = df.groupby(['playlist'], as_index=False)[['name']].agg(lambda x: '<br>'.join(x))
+    df = df.groupby(['playlist'], as_index=False)[['name']].agg(lambda x: '<br>'.join(x.head(MAX_HOVER_ROWS)))
 
     return _h_bar(series, title='Most Common Playlists For Artist: ' + artist_name,
                   xaxis='Number of Artist Songs in the Playlist', 
-                  hovertext=df.sort_values(by='playlist', key=lambda x: x.map(series)).head(MAX_HOVER_ROWS)['name']
+                  hovertext=df.sort_values(by='playlist', key=lambda x: x.map(series))['name'], fixHeight=True
                   )
 
 
@@ -487,13 +491,15 @@ def shared_graph_top_songs_by_artist(UNIQUE_SONGS_DF, artist_name):
     ])
 
     fig.update_layout(autosize=True, title_text='Most Common Songs For Artist: ' + artist_name,
-                      xaxis_title="Number of Playlists The Artist's Song Is In")
+                      xaxis_title="Number of Playlists The Artist's Song Is In",
+                      height=min(max((len(df)+1)*25, 300), 500))
 
     return Markup(fig.to_html(full_html=False))
 
 
 def shared_graph_top_rank_table(df):
-    values = [['Artists', 'Songs'], [df['artists_short_rank'], df['songs_short_rank']],
+    '''Top Rank Table for CurrentlyPlaying and SingleSong'''
+    values = [['Artists', 'Song'], [df['artists_short_rank'], df['songs_short_rank']],
                 [df['artists_med_rank'], df['songs_med_rank']], [df['artists_long_rank'], df['songs_long_rank']]]
 
     fig = go.Figure(data=[go.Table(
@@ -519,8 +525,8 @@ def shared_graph_top_rank_table(df):
             height=40)
     )
     ])
-    fig.update_layout(
-        title_text='Song / Artist Rank in Top 50', height=300)
+    fig.update_layout(title_text=df['name'].iloc[0] + ' by [' + df['artist'].iloc[0] + '] Ranks in Top 50', 
+                      height=TOP_RANK_TABLE_MIN_HEIGHT)
 
     return Markup(fig.to_html(full_html=False))
 
@@ -554,6 +560,7 @@ class CurrentlyPlayingPage():
         ALL_SONGS_DF = self._all_songs_df
 
         song_df = self._song_df[FEATURE_COLS]
+        # print(song_df)
 
         if self._playlist:
             playlist_df = ALL_SONGS_DF[ALL_SONGS_DF['playlist']
@@ -700,8 +707,8 @@ class CurrentlyPlayingPage():
                            today]*len(df['playlist'])})
 
         fig = ff.create_gantt(new)
-        fig.update_layout(title_text='Timeline Of When ' +
-                          self._song + ' Was Added To Playlists')
+        fig.update_layout(title_text='Timeline Of When ' + self._song + ' Was Added To Playlists',
+                          height=min(max((len(df)+1)*50, 400), 500))
 
         return Markup(fig.to_html(full_html=False))
 
@@ -750,7 +757,7 @@ class CurrentlyPlayingPage():
                 percents.append(len(avg_df[mask].index)/length*100)
 
             series = pd.Series(dict(zip(self._song_genres, percents)))
-            return _h_bar(series, title=title, xaxis=xaxis, percents=True)
+            return _h_bar(series, title=title, xaxis=xaxis, percents=True, fixHeight=True)
         return None
 
     def graph_all_artists(self):
@@ -1508,10 +1515,12 @@ class AnalyzeArtistPage():
         self._artist_df = all_songs_df[mask]
         # self._pure_artist_df = all_songs_df[all_songs_df['artist'] == artist]
 
-        df = unique_songs_df[unique_songs_df['artist'] == artist].iloc[0]
-        self._artist_ranks = [df['artists_short_rank'],
-                              df['artists_med_rank'], df['artists_long_rank']]
-        self._artist_genres = df['genres'][0]
+        row = unique_songs_df[unique_songs_df['artist'].apply(lambda x: artist in x.split(', '))].iloc[0]
+        ind = row['artist'].split(', ').index(artist) if type(row['artists_short_rank']) != int and row['artists_short_rank']!='N/A' else -1
+        self._artist_ranks = [row['artists_short_rank'].split(', ')[ind] if ind != -1 else row['artists_short_rank'],
+                              row['artists_med_rank'].split(', ')[ind] if ind != -1 else row['artists_med_rank'], 
+                              row['artists_long_rank'].split(', ')[ind] if ind != -1 else row['artists_long_rank']]
+        self._artist_genres = row['genres'][ind] if ind != -1 else row['genres'][0]
 
         self._user_playlists = all_songs_df['playlist'].unique()
 
@@ -1565,7 +1574,7 @@ class AnalyzeArtistPage():
         )
         ])
         fig.update_layout(
-            title_text='Artist & Artist Songs Rank in Top 50')
+            title_text='Artist & Artist Songs Rank in Top 50', height=max(TOP_RANK_TABLE_MIN_HEIGHT, (len(names_col)+1)*40))
 
         return Markup(fig.to_html(full_html=False))
 
@@ -1597,6 +1606,7 @@ class AnalyzeArtistPage():
 
         # Create dataframe - each row a playlist, each column a genre
         percents = defaultdict(list)
+        names = defaultdict(dict)
         data = []
         for g in self._artist_genres:
             for p in self._user_playlists:
@@ -1605,6 +1615,7 @@ class AnalyzeArtistPage():
                 mask = df['genres'].apply(
                     lambda x: g in {z for y in x for z in y})
                 percents[p].append(len(df[mask])/len(df)*100)
+                names[g][p] = [str(len(df[mask])) + ' Songs'] + df[mask].sample(min(len(df[mask]),MAX_HOVER_ROWS))['name'].to_list()
 
         for i in percents:
             percents[i].append(sum(percents[i]))
@@ -1617,7 +1628,8 @@ class AnalyzeArtistPage():
         for g in self._artist_genres:
             series = pd.Series(
                 dict(zip(df.index, df[g])))
-            go_bar = _h_bar(series, name=g,
+            go_bar = _h_bar(series, name=g, 
+                            hovertext=['<br>'.join(names[g][i]) for i in df.index],
                             percents=True, to_html=False)
             data.append(go_bar)
 
@@ -1637,8 +1649,9 @@ class AnalyzeArtistsPage():
 
         self._artist_genres = []
         for a in artists:
-            df = all_songs_df[all_songs_df['artist'] == a]
-            self._artist_genres.append(df.iloc[0]['genres'][0])
+            row = unique_songs_df[unique_songs_df['artist'].apply(lambda x: a in x.split(', '))].iloc[0]
+            ind = row['artist'].split(', ').index(a) if type(row['artists_short_rank']) != int and row['artists_short_rank']!='N/A' else -1
+            self._artist_genres.append(row['genres'][ind] if ind != -1 else row['genres'][0])
 
     def graph_artist_timelines(self):
         return shared_graph_count_timelines(
@@ -1665,9 +1678,11 @@ class AnalyzeArtistsPage():
             df = df.sort_values(by='songs_short_rank', ascending=True)
             df['songs_short_rank'].replace({51: 'N/A'}, inplace=True)
 
-            row = UNIQUE_SONGS_DF[UNIQUE_SONGS_DF['artist'] == a].iloc[0]
-            artist_ranks = [row['artists_short_rank'],
-                                row['artists_med_rank'], row['artists_long_rank']]
+            row = UNIQUE_SONGS_DF[UNIQUE_SONGS_DF['artist'].apply(lambda x: a in x.split(', '))].iloc[0]
+            ind = row['artist'].split(', ').index(a) if type(row['artists_short_rank']) != int and row['artists_short_rank']!='N/A' else -1
+            artist_ranks = [row['artists_short_rank'].split(', ')[ind] if ind != -1 else row['artists_short_rank'],
+                                row['artists_med_rank'].split(', ')[ind] if ind != -1 else row['artists_med_rank'], 
+                                row['artists_long_rank'].split(', ')[ind] if ind != -1 else row['artists_long_rank']]
             names_col = ['<b>' + a + '</b>'] + df['name'].to_list()
             short_col = ['<b>' + str(artist_ranks[0]) + '</b>'] + df['songs_short_rank'].to_list()
             med_col = ['<b>' + str(artist_ranks[1]) + '</b>'] + df['songs_med_rank'].to_list()
@@ -1697,7 +1712,7 @@ class AnalyzeArtistsPage():
             )
             ])
             fig.update_layout(
-                title_text= a + '\'s' + ' Ranks in Top 50')
+                title_text= a + '\'s' + ' Ranks in Top 50', height=max(TOP_RANK_TABLE_MIN_HEIGHT, (len(names_col)+1)*40))
 
             figs.append(Markup(fig.to_html(full_html=False)))
         return figs
@@ -1951,7 +1966,7 @@ class SingleSongPage():
                 percents.append(len(avg_df[mask].index)/length*100)
 
             series = pd.Series(dict(zip(self._song_genres, percents)))
-            return _h_bar(series, title=title, xaxis=xaxis, percents=True)
+            return _h_bar(series, title=title, xaxis=xaxis, percents=True, fixHeight=True)
         return None
 
     def graph_all_artists(self):

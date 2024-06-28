@@ -151,6 +151,10 @@ def index():
         session['ALL_SONGS_DF'] = pd.read_pickle(f'{path}all_songs_df.pkl')
         session['UNIQUE_SONGS_DF'] = pd.read_pickle(f'{path}unique_songs_df.pkl')
 
+        unique_artist_names = pd.read_pickle(f'{path}unique_artist_names.pkl')
+        session['lowercase_artists'] = {i.lower(): i
+                             for i in unique_artist_names}
+
         session['TOP_ARTISTS'] = _load(path, 'top_artists.pkl')
         session['TOP_SONGS'] = _load(path, 'top_songs.pkl')
 
@@ -219,6 +223,7 @@ def currently_playing():
 
     artist = ', '.join([listy['name'] for listy in track['item']['artists']])
     song = track['item']['name']
+    song_id = track['item']['id']
 
     # See if User is playing one of their playlists
     if not track['context'] is None and not track['context']['uri'] is None:
@@ -262,7 +267,8 @@ def currently_playing():
                                 song_features_radar=song_features_radar, song_features_percentiles_bar=song_features_percentiles_bar,
                                 playlist_date_gantt=playlist_date_gantt, playlist_timeline=playlist_timeline,
                                 artist_top_graphs=artist_top_graphs,
-                                artist_genres=artist_genres, genres_playlist_percentiles=genres_playlist_percentiles, genres_overall_percentiles=genres_overall_percentiles
+                                artist_genres=artist_genres, genres_playlist_percentiles=genres_playlist_percentiles, genres_overall_percentiles=genres_overall_percentiles,
+                                song_id=song_id, artists_url=artist.replace(', ', '/'), playlist_id=playlist_id
                                 )
 
 
@@ -311,8 +317,6 @@ def search():
 
         lowercase_playlists = {i.lower(): session['PLAYLIST_DICT'][i]
                                for i in session['PLAYLIST_DICT']}
-        lowercase_artists = {i.lower(): i
-                             for i in session['ALL_SONGS_DF']['artist'].unique()}
         all_song_ids = session['ALL_SONGS_DF']['id'].unique()
 
         found_list = []
@@ -323,8 +327,8 @@ def search():
             if i.lower() in lowercase_playlists:
                 found_list.append(lowercase_playlists[i])
                 found_playlist = True
-            elif i.lower() in lowercase_artists:
-                found_list.append(lowercase_artists[i])
+            elif i.lower() in session['lowercase_artists']:
+                found_list.append(session['lowercase_artists'][i])
                 found_artist = True
             elif i in all_song_ids:
                 found_list.append(i)
@@ -395,14 +399,14 @@ def analyze_playlists(playlist_ids):
 
         boxplot = boxplots[0]
         length = boxplots[1]
-        names = ', '.join(playlist_names)
 
         playlist_timelines = page.graph_playlist_timelines()
         genres = page.graph_genres_by_playlists()
 
         artists = page.graph_artists_by_playlists()
 
-        return render_template('analyze_playlists.html', boxplot=boxplot, length=length, playlists=names,
+        return render_template('analyze_playlists.html', boxplot=boxplot, length=length, playlists=playlist_names,
+                               num_playlists=len(playlist_names), playlist_ids=playlist_ids,
                             playlist_timelines=playlist_timelines, genres=genres, artists=artists
                             )
 
@@ -414,7 +418,7 @@ def analyze_artists(artist_names):
     if not session['AUTH_MANAGER'].validate_token(session['CACHE_HANDLER'].get_cached_token()):
         return redirect('/')
     
-    artist_names = artist_names.split('/')
+    artist_names = [session['lowercase_artists'][i.lower()] for i in artist_names.split('/')]
     # Single Artist
     if len(artist_names) == 1:
         artist_name = artist_names[0]
@@ -453,9 +457,10 @@ def analyze_artists(artist_names):
         
         audio_features = page.graph_artists_boxplots()
 
-        return render_template('analyze_artists.html', artists=', '.join(artist_names), artist_timelines=artist_timelines,
-                           genres=genres, top_ranks=top_ranks, top_playlists=top_playlists,
-                           audio_features=audio_features)
+        return render_template('analyze_artists.html', artists_list=artist_names,
+                            artist_timelines=artist_timelines,
+                            genres=genres, top_ranks=top_ranks, top_playlists=top_playlists,
+                            audio_features=audio_features)
     
 
 # Single / Multiple Songs
@@ -472,7 +477,8 @@ def analyze_songs(song_ids):
         page = SingleSongPage(
             song_id, session['ALL_SONGS_DF'], session['UNIQUE_SONGS_DF'])
         song = page.get_song()
-        artist = page.get_artist().split(', ')
+        artist = page.get_artist()
+        artist_url = artist.replace(', ', '/')
 
         top_rank_table = page.graph_top_rank_table()
 
@@ -486,7 +492,7 @@ def analyze_songs(song_ids):
         artist_genres = page.graph_artist_genres()
         genres_overall_percentiles = page.graph_song_genres_vs_avg()
 
-        return render_template('single_song.html', song=song, artist=artist, 
+        return render_template('single_song.html', song=song, artist=artist, artist_url=artist_url, 
                                 top_rank_table=top_rank_table,
                                 song_features_radar=song_features_radar, song_features_percentiles_bar=song_features_percentiles_bar,
                                 playlist_date_gantt=playlist_date_gantt,
@@ -494,7 +500,7 @@ def analyze_songs(song_ids):
                                 artist_genres=artist_genres, genres_overall_percentiles=genres_overall_percentiles
                                 )
 
-    # Multiple Artists
+    # Multiple Songs
     elif len(song_ids) > 1:
         pass
 

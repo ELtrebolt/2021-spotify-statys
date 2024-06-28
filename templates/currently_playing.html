@@ -19,7 +19,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 
-    <h1>You are playing "{{song}}" by [{{artist}}] while listening to your playlist <i>{{playlist}}</i></h1>
+    <h1>You are playing "<a href="/songs/{{song_id}}">{{ song }}</a>" 
+        by <a href="/artists/{{artists_url}}">[{{ artist }}]</a>
+        while listening to your playlist 
+        {% if playlist %}<i><a href="/playlists/{{playlist_id}}">{{ playlist }}</a></i>{% endif %}
+        {% if not playlist %}<i>{{ playlist }}</i>{% endif %}
+    </h1>
     <hr>
 
     <body>
@@ -29,10 +34,10 @@
         
         <h2>Song Features</h2>
         <div class="wrapper">
-            <div class="div div2">
+            <div class="div2">
                 {{ song_features_radar }}
             </div>
-            <div class="div div2">
+            <div class="div2">
                 {{ song_features_percentiles_bar }}
             </div>
         </div>
@@ -69,7 +74,7 @@
         {% endif %}
 
         {% if artist_genres[1] == True %}
-            <section>
+            <section style="text-align: center"">
                 <img src="data:image/png;base64, {{ artist_genres[0] }}" style="max-width: 100%;">
             </section>
         {% endif %}

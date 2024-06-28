@@ -20,11 +20,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
 
     <div>
-        <h1>"{{song}}" by
-        {% for a in artist %}
-            <a href="/artists/{{a}}">{{ a }}</a>
-            {% if not loop.last %},{% endif %}
-        {% endfor %}
+        <h1>"{{song}}" by <a href="/artists/{{artist_url}}">{{ artist }}</a>
         </h1>
     </div>
     <hr>

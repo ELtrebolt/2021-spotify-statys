@@ -12,6 +12,10 @@ import traceback
 REDIRECT_URI = 'https://spotify-statys.herokuapp.com/'
 PERCENTILE_COLS = ['popularity', 'danceability', 'energy', 'loudness', 'speechiness',
                    'acousticness', 'instrumentalness', 'liveness', 'valence', 'tempo', 'duration']
+FEATURE_COLS = ['id', 'danceability', 'energy', 'loudness', 'speechiness',
+                   'acousticness', 'instrumentalness', 'liveness', 'valence', 'tempo', 'duration']
+# don't need mode, key, type, uri, track_href, analysis_url, time_signature
+        
 
 def _dump(path, obj):
     with open(path, 'wb') as f:   # Pickling
@@ -140,6 +144,7 @@ class SetupData():
         # 1 minute = 60 seconds = 60 × 1000 milliseconds = 60,000 ms
         features_df['duration'] = features_df['duration_ms']/1000
         features_df.drop(columns='duration_ms', inplace=True)
+        features_df = features_df[FEATURE_COLS]
 
         final_df = song_meta_df.merge(features_df)
 
@@ -164,7 +169,6 @@ class SetupData():
             tracks = self.SPOTIFY.playlist_items(_id, offset=offset)
             df = pd.concat([df, self._get_100_songs(tracks, name)])
             offset += len(tracks['items'])
-            # print(name, offset)
 
         return df.reset_index()
 
@@ -209,9 +213,13 @@ class SetupData():
         changing_cols = ['id', 'playlist', 'date_added']
         UNIQUE_SONGS_DF = ALL_SONGS_DF.groupby([i for i in ALL_SONGS_DF.columns if i not in changing_cols], as_index=False)[
             changing_cols].agg(lambda x: list(x))
-        UNIQUE_SONGS_DF.drop_duplicates(
-            subset=['name', 'artist'], inplace=True)
-
+        duplicates = UNIQUE_SONGS_DF[UNIQUE_SONGS_DF.duplicated(subset=['name', 'artist'], keep=False)]
+        duplicates.sort_values(by=['name', 'popularity'], ascending=[True, False], inplace=True)
+        duplicates_with_lower_popularity = duplicates.iloc[1::2]
+        # duplicates_with_lower_popularity.to_csv('test2.csv')
+        # All Night by Vamps should have 65 instead of 0 popularity
+        UNIQUE_SONGS_DF.drop(duplicates_with_lower_popularity.index, inplace=True)
+        
         for col in PERCENTILE_COLS:
             sz = UNIQUE_SONGS_DF[col].size-1
             UNIQUE_SONGS_DF[col + '_percentile'] = UNIQUE_SONGS_DF[col].rank(
@@ -291,13 +299,16 @@ class SetupData():
 
 
     def _add_genres(self):
+        # Add 'genres' column to ALL_SONGS and UNIQUE_SONGS like ['pop', 'punk']
         ALL_SONGS_DF = pd.read_pickle(f'{self.path}all_songs_df.pkl')
         UNIQUE_SONGS_DF = pd.read_pickle(f'{self.path}unique_songs_df.pkl')
 
         # Get Genres for Each Song By Artist Genres - Takes 2 minutes for 1000 unique artists
-        unique_artist_ids = set()
-        for i in UNIQUE_SONGS_DF['artist_ids']:
-            unique_artist_ids = unique_artist_ids | set(i.split(', '))
+        unique_artist_names, unique_artist_ids = set(), set()
+        for i in zip(UNIQUE_SONGS_DF['artist'], UNIQUE_SONGS_DF['artist_ids']):
+            unique_artist_names = unique_artist_names | set(i[0].split(', '))
+            unique_artist_ids = unique_artist_ids | set(i[1].split(', '))
+        _dump(f'{self.path}unique_artist_names.pkl', unique_artist_names)
         # if '' in unique_artist_ids:
         #     unique_artist_ids.remove('')
 
@@ -327,12 +338,15 @@ class SetupData():
                 song_genres = []
                 for j in i.split(', '):
                     # Potential error here? ufo ufo does not have la pop as a genre
-                    # try:
-                    song_genres.append(genres_dict[j])
-                    # except Exception as e:
-                    #    print(j, e)
-                    #    yield f'data:No Artist Id Found{j}<br>\n\n\n'
-                    #    song_genres.append('N/A')
+                    try:
+                        song_genres.append(genres_dict[j])
+                    except Exception as e:
+                        print('Artist ID DUP FOUND', j, e)
+                        a = self.SP.artist(j)
+                        if a['genres']:
+                            song_genres.append(a['genres'])
+                        else:
+                            song_genres.append('N/A')
                 genres_list.append(song_genres)
             df['genres'] = genres_list
 

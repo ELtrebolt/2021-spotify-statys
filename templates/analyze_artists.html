@@ -19,7 +19,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
 
-    <h1>Compare Artists: {{ artists }} </h1>
+    <h1>Compare Artists: 
+        {% for a in artists_list %}
+            <a href="/artists/{{a}}">{{ a }}</a>
+            {% if not loop.last %},{% endif %}
+        {% endfor %}
+    </h1>
     <hr>
 
     <body>
@@ -43,7 +48,6 @@
 
         <h2>Artists' Audio Features</h2>
         {{ audio_features }}
-        <hr>
     </body>
 
 </html>
