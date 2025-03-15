@@ -325,10 +325,10 @@ def search():
         found_song = False
         for i in query:
             if i.lower() in lowercase_playlists:
-                found_list.append(lowercase_playlists[i])
+                found_list.append(lowercase_playlists[i.lower()])
                 found_playlist = True
             elif i.lower() in session['lowercase_artists']:
-                found_list.append(session['lowercase_artists'][i])
+                found_list.append(session['lowercase_artists'][i.lower()])
                 found_artist = True
             elif i in all_song_ids:
                 found_list.append(i)

@@ -10,10 +10,10 @@ import traceback
 # REDIRECT_URI = 'http://127.0.0.1:5000/'
 # Run Heroku
 REDIRECT_URI = 'https://spotify-statys.herokuapp.com/'
-PERCENTILE_COLS = ['popularity', 'danceability', 'energy', 'loudness', 'speechiness',
-                   'acousticness', 'instrumentalness', 'liveness', 'valence', 'tempo', 'duration']
-FEATURE_COLS = ['id', 'danceability', 'energy', 'loudness', 'speechiness',
-                   'acousticness', 'instrumentalness', 'liveness', 'valence', 'tempo', 'duration']
+PERCENTILE_COLS = ['popularity', 'duration']
+# DEPRECATED 2025
+#FEATURE_COLS = ['id', 'danceability', 'energy', 'loudness', 'speechiness',
+#                   'acousticness', 'instrumentalness', 'liveness', 'valence', 'tempo', 'duration']
 # don't need mode, key, type, uri, track_href, analysis_url, time_signature
         
 
@@ -80,7 +80,7 @@ class SetupData():
 
         song_meta = {'id': [], 'name': [],
                      'artist': [], 'album': [], 'explicit': [], 'popularity': [],
-                     'playlist': [], 'date_added': [], 'artist_ids': []}
+                     'playlist': [], 'date_added': [], 'artist_ids': [], 'duration': []}
 
         for item in tracks['items']:
             meta = item['track']
@@ -124,31 +124,14 @@ class SetupData():
                 date_added = d1.strftime('%Y-%m-%d')
                 song_meta['date_added'].append(date_added)
 
+                # convert milliseconds to mins
+                # duration_ms: The duration of the track in milliseconds.
+                # 1 minute = 60 seconds = 60 × 1000 milliseconds = 60,000 ms
+                song_meta['duration'] = meta['duration_ms']/1000
+
         song_meta_df = pd.DataFrame.from_dict(song_meta)
 
-        features = self.SP.audio_features(song_meta['id'])
-        # Song Features = None for podcast episodes like Greendale Is Where I Belong
-        if None in features:
-            features2 = []
-            for i,j in enumerate(features):
-                if j is None:
-                    song_meta_df.drop([i], inplace=True)
-                else:
-                    features2.append(j)
-        else:
-            features2 = features
-        features_df = pd.DataFrame.from_dict(features2)
-
-        # convert milliseconds to mins
-        # duration_ms: The duration of the track in milliseconds.
-        # 1 minute = 60 seconds = 60 × 1000 milliseconds = 60,000 ms
-        features_df['duration'] = features_df['duration_ms']/1000
-        features_df.drop(columns='duration_ms', inplace=True)
-        features_df = features_df[FEATURE_COLS]
-
-        final_df = song_meta_df.merge(features_df)
-
-        return final_df
+        return song_meta_df
 
 
     # Get all of a playlists songs

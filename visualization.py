@@ -26,12 +26,9 @@ matplotlib.use('Agg')
 
 # Constants -------------------------------------------------------------------
 
-PERCENTILE_COLS = ['popularity', 'danceability', 'energy', 'loudness',
-                   'speechiness', 'acousticness', 'instrumentalness',
-                   'liveness', 'valence', 'tempo', 'duration']
-FEATURE_COLS = ['popularity', 'danceability', 'energy', 'speechiness', 'acousticness',
-                'instrumentalness', 'liveness', 'valence']
-OTHER_COLS = ['loudness', 'tempo', 'duration']
+PERCENTILE_COLS = ['popularity']
+FEATURE_COLS = ['popularity']
+
 LABEL_CUTOFF_LENGTH = 25
 MAX_HOVER_ROWS = 10
 MAX_HBARS = 10
@@ -1441,7 +1438,7 @@ class Top50Page():
             # True False False for 1st False True False for 2nd False False True for 3rd
             visibility = [i == j for j in range(len(labels))]
             # 8 Feature Cols + 8 Feature Cols + 1 Bar Chart + 1 Bar Chart
-            visibility = [k for j in [[i]*18 for i in visibility]
+            visibility = [k for j in [[i]*4 for i in visibility]
                           for k in j] + [False]*12
             button = dict(
                 method='update',
@@ -1454,7 +1451,7 @@ class Top50Page():
         allButton = dict(
             method='update',
             label='All',
-            args=[{'visible': [False]*54+[True]*12},
+            args=[{'visible': [False]*12+[True]*12},
                   {'boxmode': 'group', 'showlegend': True}]
         )
         buttons += [allButton]
@@ -1472,7 +1469,7 @@ class Top50Page():
         ])
 
         # hoverlabel_font_color='white'
-        fig.update_layout(height=2000, updatemenus=updatemenus, showlegend=False,
+        fig.update_layout(height=1000, updatemenus=updatemenus, showlegend=False,
                           annotations=[
                               dict(text="Time Period",
                                    x=.3,
@@ -1485,7 +1482,7 @@ class Top50Page():
 
         # Only show 1st 18 Traces on page-load
         Ld = len(fig.data)
-        num = 18
+        num = 4
         for k in range(num, Ld):
             fig.update_traces(visible=False, selector=k)
 
