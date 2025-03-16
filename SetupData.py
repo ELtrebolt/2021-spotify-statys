@@ -28,8 +28,7 @@ def _load(path):
 class SetupData():
     def __init__(self, session):
         self.SPOTIFY = session['SPOTIFY']
-        self.SP = session['SP']
-
+        
         self.USER_ID = self.SPOTIFY.me()['id']
         self.PLAYLIST_DICT = self._get_all_playlists_dict()
 
@@ -124,10 +123,10 @@ class SetupData():
                 date_added = d1.strftime('%Y-%m-%d')
                 song_meta['date_added'].append(date_added)
 
-                # convert milliseconds to mins
+                # convert milliseconds to secs
                 # duration_ms: The duration of the track in milliseconds.
                 # 1 minute = 60 seconds = 60 × 1000 milliseconds = 60,000 ms
-                song_meta['duration'] = meta['duration_ms']/1000
+                song_meta['duration'].append(meta['duration_ms']/1000)
 
         song_meta_df = pd.DataFrame.from_dict(song_meta)
 
@@ -199,7 +198,7 @@ class SetupData():
         duplicates = UNIQUE_SONGS_DF[UNIQUE_SONGS_DF.duplicated(subset=['name', 'artist'], keep=False)]
         duplicates.sort_values(by=['name', 'popularity'], ascending=[True, False], inplace=True)
         duplicates_with_lower_popularity = duplicates.iloc[1::2]
-        # duplicates_with_lower_popularity.to_csv('test2.csv')
+        # duplicates_with_lower_popularity.to_csv('dups.csv')
         # All Night by Vamps should have 65 instead of 0 popularity
         UNIQUE_SONGS_DF.drop(duplicates_with_lower_popularity.index, inplace=True)
         
@@ -216,15 +215,17 @@ class SetupData():
 
     def _get_top_artists(self):
         # [Artist1, Artist2, Artist3]
-        TOP_ARTISTS_SHORT = [i['name'] for i in self.SPOTIFY.current_user_top_artists(
-            time_range='short_term', limit=50)['items']]
-        TOP_ARTISTS_MED = [i['name'] for i in self.SPOTIFY.current_user_top_artists(
-            time_range='medium_term', limit=50)['items']]
-        TOP_ARTISTS_LONG = [i['name'] for i in self.SPOTIFY.current_user_top_artists(
-            time_range='long_term', limit=50)['items']]
-        TOP_ARTISTS = [TOP_ARTISTS_SHORT, TOP_ARTISTS_MED, TOP_ARTISTS_LONG]
+        TOP_ARTISTS_SHORT = {i['name']:i['popularity'] for i in self.SPOTIFY.current_user_top_artists(
+            time_range='short_term', limit=50)['items']}
+        TOP_ARTISTS_MED = {i['name']:i['popularity'] for i in self.SPOTIFY.current_user_top_artists(
+            time_range='medium_term', limit=50)['items']}
+        TOP_ARTISTS_LONG = {i['name']:i['popularity'] for i in self.SPOTIFY.current_user_top_artists(
+            time_range='long_term', limit=50)['items']}
+        TOP_ARTISTS_NAMES = [list(TOP_ARTISTS_SHORT.keys()), list(TOP_ARTISTS_MED.keys()), list(TOP_ARTISTS_LONG.keys())]
+        TOP_ARTISTS_POPULARITY = [list(TOP_ARTISTS_SHORT.values()), list(TOP_ARTISTS_MED.values()), list(TOP_ARTISTS_LONG.values())]
 
-        _dump(f'{self.path}top_artists.pkl', TOP_ARTISTS)
+        _dump(f'{self.path}top_artists.pkl', TOP_ARTISTS_NAMES)
+        _dump(f'{self.path}top_artists_pop.pkl', TOP_ARTISTS_POPULARITY)
 
 
     # INT or "N/A" if single, STR separated by commas if multiple
@@ -303,11 +304,12 @@ class SetupData():
 
         # Getting 50 artists at a time is a LOT faster than getting 1 artist at a time
         for i in range(0, total, 50):
-            listy = self.SP.artists(unique_artist_ids[i:i+50])
+            listy = self.SPOTIFY.artists(unique_artist_ids[i:i+50])
             for a in listy['artists']:
                 try:
                     g = a['genres']
-                except:
+                except Exception as e:
+                    print(e)
                     g = []
                 if g:
                     genres_dict[a['id']] = g
@@ -325,7 +327,7 @@ class SetupData():
                         song_genres.append(genres_dict[j])
                     except Exception as e:
                         print('Artist ID DUP FOUND', j, e)
-                        a = self.SP.artist(j)
+                        a = self.SPOTIFY.artist(j)
                         if a['genres']:
                             song_genres.append(a['genres'])
                         else:
@@ -378,8 +380,9 @@ class SetupData():
 
             # Takes a while
             yield f'data:Setting Up Top50 Page...9/{total}<br>\n\n\n'
+            top_artists_pop = _load(f'{self.path}top_artists_pop.pkl')
             top50_page = Top50Page(
-                self.path, UNIQUE_SONGS_DF, top_artists)
+                self.path, UNIQUE_SONGS_DF, top_artists, top_artists_pop)
             _dump(f'{self.path}top50_page.pkl', top50_page)
 
             yield f'data:Setting Up My Playlists Page...10/{total}<br>\n\n\n'

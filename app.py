@@ -6,7 +6,7 @@
 import pickle
 import pandas as pd
 from visualization import CurrentlyPlayingPage, AnalyzePlaylistsPage, AnalyzePlaylistPage,AnalyzeArtistPage, AnalyzeArtistsPage, SingleSongPage, MyPlaylistsPage
-from SetupData import SetupData
+from SetupData import SetupData, REDIRECT_URI
 import datetime
 import spotipy
 import os
@@ -20,11 +20,6 @@ from flask import Flask, session, request, redirect, render_template, Response
 
 CLIENT_ID = '6d54b292d6dd41f5a9b2942bc0098149'
 CLIENT_SECRET = '1ab268173f1445198ba8cbce48a8ec5e'
-
-# Test Local
-# REDIRECT_URI = 'http://127.0.0.1:5000/'
-# Run Heroku
-REDIRECT_URI = 'https://spotify-statys.herokuapp.com/'
 
 # -------------------------------Data-----------------------------------------------
 
@@ -70,9 +65,6 @@ for i in [cache_folder, cache_folder2]:
 def spotify_cache_path():
     return cache_folder + session.get('uuid')
 
-def sp_cache_path():
-    return cache_folder2 + session.get('uuid')
-
 # -------------------------------Web Page Routes-----------------------------------------------
 
 # Setup1 = Collecting Playlist Data, Called by setup.html JS as EventSource
@@ -117,9 +109,6 @@ def index():
         # SPOTIFY = for Current User Data
         session['SPOTIFY'] = spotipy.Spotify(auth_manager=session['AUTH_MANAGER'])
         # SP = for Public Data, need a separate Cache Handler otherwise cannot write token to .cache
-        client_credentials = spotipy.oauth2.SpotifyClientCredentials(
-            cache_handler=spotipy.cache_handler.CacheFileHandler(cache_path=sp_cache_path()))
-        session['SP'] = spotipy.Spotify(auth_manager=client_credentials)
 
         session['setup'] = SetupData(session)
 
@@ -159,6 +148,9 @@ def index():
         session['TOP_SONGS'] = _load(path, 'top_songs.pkl')
 
         session['HOME_PAGE'] = _load(path, 'home_page.pkl')
+        ## For troubleshooting
+        # artists = session['SPOTIFY'].current_user_followed_artists()['artists']['items']
+        # session['ABOUT_PAGE'] = AboutPage(path, session['ALL_SONGS_DF'], session['UNIQUE_SONGS_DF'], artists)
         session['ABOUT_PAGE'] = _load(path, 'about_page.pkl')
         session['TOP50_PAGE'] = _load(path, 'top50_page.pkl')
         session['PLAYLISTS_PAGE'] = _load(path, 'myplaylists_page.pkl')
@@ -202,7 +194,6 @@ def retry(traceback):
 def sign_out():
     try:
         os.remove(spotify_cache_path())
-        os.remove(sp_cache_path())
         shutil.rmtree(session['PATH'])
         session.clear()
         cache.clear()
