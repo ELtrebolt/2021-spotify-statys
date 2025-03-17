@@ -226,13 +226,18 @@ def currently_playing():
             playlist = None
     else:
         playlist = None
+    artists_url = artist.replace(', ', '/')
 
     df = session['UNIQUE_SONGS_DF']
-    df = df[(df['name'] == song) & (df['artist'] == artist)]
-    song_in_playlist = True if len(df) > 0 else False
-    if not song_in_playlist:
-        return f'<h3>You are playing the song {song} by {artist} - but it\'s not in any of your created playlists :(</h3>' \
-            f'<h3>Start listening to any song from your playlists to see cool stats!</h3>'
+    song_in_library = True if len(df[(df['name'] == song) & (df['artist'] == artist)]) > 0 else False
+    artist_in_library = True if len(df[df['artist'] == artist]) > 0 else False
+    if not song_in_library:
+        if artist_in_library:
+            return f'<h3>You are playing the song {song} by <a href=\"/artists/{artists_url}\">{artist}</a> - but it\'s not in any of your created playlists :(</h3>' \
+                f'<h3>Start listening to any song from your playlists to see cool stats!</h3>'
+        else:
+            return f'<h3>You are playing the song {song} by {artist} - but it\'s not in any of your created playlists :(</h3>' \
+                f'<h3>Start listening to any song from your playlists to see cool stats!</h3>' 
     else:
 
         page = CurrentlyPlayingPage(
@@ -259,7 +264,7 @@ def currently_playing():
                                 playlist_date_gantt=playlist_date_gantt, playlist_timeline=playlist_timeline,
                                 artist_top_graphs=artist_top_graphs,
                                 artist_genres=artist_genres, genres_playlist_percentiles=genres_playlist_percentiles, genres_overall_percentiles=genres_overall_percentiles,
-                                song_id=song_id, artists_url=artist.replace(', ', '/'), playlist_id=playlist_id
+                                song_id=song_id, artists_url=artists_url, playlist_id=playlist_id
                                 )
 
 

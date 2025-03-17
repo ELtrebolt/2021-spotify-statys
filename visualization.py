@@ -562,8 +562,8 @@ class CurrentlyPlayingPage():
         if self._playlist:
             playlist_df = ALL_SONGS_DF[ALL_SONGS_DF['playlist']
                                        == self._playlist][FEATURE_COLS]
-        artist_dfs = [UNIQUE_SONGS_DF[UNIQUE_SONGS_DF['artist']
-                                      == i][FEATURE_COLS] for i in self._artist.split(', ')]
+        artist_dfs = [UNIQUE_SONGS_DF[UNIQUE_SONGS_DF['artist'].apply(lambda x: i in x)]
+                        [FEATURE_COLS] for i in self._artist.split(', ')]
         avg_df = UNIQUE_SONGS_DF[FEATURE_COLS]
 
         if self._playlist:
@@ -572,11 +572,11 @@ class CurrentlyPlayingPage():
             dfs = [avg_df, song_df]
 
         for df in dfs:
-            df['popularity'] = df['popularity']/100
+            df['popularity'] = round(df['popularity']/100, 2)
         dfs = [df.median(axis=0) for df in dfs]
 
         for df in artist_dfs:
-            df['popularity'] = df['popularity']/100
+            df['popularity'] = round(df['popularity']/100, 2)
         artist_dfs = [df.median(axis=0) for df in artist_dfs]
 
         # add song values to last so features and percentiles avgs match colors
@@ -987,17 +987,18 @@ class AboutPage():
 
         dicty = dict()
         if albums:
-            for a in ALL_SONGS_DF['album'].unique():
-                a_df = ALL_SONGS_DF[ALL_SONGS_DF['album'] == a]
-                dicty[a] = len(a_df.index)
+            df = ALL_SONGS_DF['album'].value_counts().reset_index()
+            df.columns = ['Album', 'Count'] 
+            df['Artist'] = [ALL_SONGS_DF[ALL_SONGS_DF['album'] == i].iloc[0]['artist'] for i in df['Album']]
         else:
+            artists, counts = [], []
             for a in {j for i in self._unique_songs_df['artist'].unique() for j in i.split(', ')}:
                 mask = ALL_SONGS_DF['artist'].apply(lambda x: a in x.split(', '))
                 a_df = ALL_SONGS_DF[mask]
-                dicty[a] = len(a_df.index)
-        dicty = {k: v for k, v in sorted(
-            dicty.items(), key=lambda x: x[1], reverse=True)[:buttons*10]}
-        df = pd.DataFrame(list(dicty.items()), columns=[yaxis.lower(), 'Count'])
+                artists.append(a)
+                counts.append(len(a_df.index))
+            df = pd.DataFrame({'Artist':artists, 'Count':counts})
+        df = df.sort_values(by='Count', ascending=False).iloc[:buttons*10]
         # df['link'] = [REDIRECT_URI + yaxis.lower() + 's/' + i for i in df[yaxis.lower()]]
 
         graphs = []
@@ -1008,7 +1009,10 @@ class AboutPage():
 
             title = 'Top ' + str(first+1)  + '-' + str(last) + f' Most Common {yaxis}s Across ' + \
                 str(len(self._all_songs_df['playlist'].unique())) + ' Playlists'
-            bar = px.bar(subset, x='Count', y=yaxis.lower(), orientation='h', title=title, text='Count')
+            if albums:
+                bar = px.bar(subset, x='Count', y=yaxis, orientation='h', title=title, text='Count', hover_data='Artist')
+            else:
+                bar = px.bar(subset, x='Count', y=yaxis, orientation='h', title=title, text='Count')
             ## Prob doesn't work with subplots
             # for r in subset.iterrows():
             #     bar.add_annotation(
@@ -1358,7 +1362,7 @@ class Top50Page():
         mask = self._unique_songs_df[rank_col].apply(lambda x: type(x) == int)
         df = self._unique_songs_df[mask]
 
-        total = len(df[rank_col].unique())   # total should be 50
+        total = len(df[rank_col].unique())   # total should be 50 but might be missing if not in playlists - should update to include them anyway
 
         num_by_genre = dict()
         top_by_genre = dict()
@@ -1830,8 +1834,8 @@ class SingleSongPage():
         UNIQUE_SONGS_DF = self._unique_songs_df
         ALL_SONGS_DF = self._all_songs_df
 
-        artist_dfs = [UNIQUE_SONGS_DF[UNIQUE_SONGS_DF['artist']
-                                      == i][FEATURE_COLS] for i in self._artist.split(', ')]
+        artist_dfs = [UNIQUE_SONGS_DF[UNIQUE_SONGS_DF['artist'].apply(lambda x: i in x)]
+                            [FEATURE_COLS] for i in self._artist.split(', ')]
         avg_df = UNIQUE_SONGS_DF[FEATURE_COLS]
         dfs = [avg_df, self._song_df[FEATURE_COLS]]
 
