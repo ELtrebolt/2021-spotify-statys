@@ -7,7 +7,7 @@ import datetime
 from re import A
 import numpy as np
 import pandas as pd
-from flask import Markup
+from markupsafe import Markup
 from matplotlib_venn import venn3
 from matplotlib_venn import venn2
 import base64

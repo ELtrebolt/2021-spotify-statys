@@ -7,7 +7,11 @@ __pycache__/
 .flask_session
 .sp_caches
 .spotify_caches
-.vscode
-.env
-.cache
+
+docs/
 env/
+tests/
+heroku/
+
+.cache
+.env

@@ -9,7 +9,9 @@ import traceback
 # Test Local
 # REDIRECT_URI = 'http://127.0.0.1:5000/'
 # Run Heroku
-REDIRECT_URI = 'https://spotify-statys.herokuapp.com/'
+# REDIRECT_URI = 'https://spotifystatys.pythonanywhere.com/callback'
+# Run PythonAnywhere
+REDIRECT_URI = 'https://spotifystatys.pythonanywhere.com/callback'
 PERCENTILE_COLS = ['popularity', 'duration']
 # DEPRECATED 2025
 #FEATURE_COLS = ['id', 'danceability', 'energy', 'loudness', 'speechiness',

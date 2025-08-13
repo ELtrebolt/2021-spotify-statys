@@ -1,44 +1,194 @@
 <!DOCTYPE html>
 <html>
-<head> </head>
+<head>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #e0e0e0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 20px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background-color: #1db954;
+            transition: width 0.3s ease;
+            width: 0%;
+        }
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 5px;
+            background-color: #f8f9fa;
+            border-left: 4px solid #1db954;
+        }
+        .error {
+            background-color: #f8d7da;
+            border-left-color: #dc3545;
+            color: #721c24;
+        }
+        .success {
+            background-color: #d4edda;
+            border-left-color: #28a745;
+            color: #155724;
+        }
+        .loading {
+            text-align: center;
+            color: #666;
+        }
+        .message {
+            margin: 5px 0;
+            padding: 5px;
+            background-color: #f8f9fa;
+            border-radius: 3px;
+        }
+    </style>
+</head>
 <body>
-    <div id="data-container"></div>
+    <div class="container">
+        <h1>Spotify Stats Setup</h1>
+        <div id="setup-container">
+            <div id="setup-1-container" style="display: none;">
+                <h2>Step 1: Collecting Your Playlists</h2>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-1-fill"></div>
+                </div>
+                <div class="status" id="status-1">
+                    <div class="loading">Initializing...</div>
+                </div>
+                <div id="messages-1"></div>
+            </div>
+            
+            <div id="setup-2-container" style="display: none;">
+                <h2>Step 2: Grouping Your Data</h2>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-2-fill"></div>
+                </div>
+                <div class="status" id="status-2">
+                    <div class="loading">Initializing...</div>
+                </div>
+                <div id="messages-2"></div>
+            </div>
+        </div>
+    </div>
 
     <script>
         var setup2 = "{{ setup2 }}";
+        var currentProgressId = null;
+        var progressInterval = null;
 
-        // Function to handle incoming data from the server
-        function handleStreamData(event) {
-            var dataContainer = document.getElementById('data-container');
-            console.log(event.data);
-            data = JSON.stringify(event.data);
-            if(data.includes("REDIRECT_URI="))
-            {
-                eventSource.close();
-                window.location.href = event.data.split('=')[1];
-            }
-            else
-            {
-                dataContainer.innerHTML += event.data;
-                if(data.includes("ERROR="))
-                {
-                    eventSource.close();
+        function updateProgress(progressId, containerId, progressFillId, statusId, messagesId) {
+            fetch(`/get_progress/${progressId}`)
+                .then(response => response.json())
+                .then(data => {
+                    const progressFill = document.getElementById(progressFillId);
+                    const status = document.getElementById(statusId);
+                    const messages = document.getElementById(messagesId);
+                    
+                    // Update progress bar
+                    if (data.total_steps > 0) {
+                        const percentage = (data.current_step / data.total_steps) * 100;
+                        progressFill.style.width = percentage + '%';
+                    }
+                    
+                    // Update status
+                    if (data.status === 'running') {
+                        status.innerHTML = `<div class="loading">Processing... ${data.current_step}/${data.total_steps}</div>`;
+                    } else if (data.status === 'complete') {
+                        status.innerHTML = '<div class="success">Setup completed successfully!</div>';
+                        clearInterval(progressInterval);
+                        
+                        // Redirect after a short delay
+                        setTimeout(() => {
+                            window.location.href = '/home';
+                        }, 2000);
+                    } else if (data.status === 'error') {
+                        status.innerHTML = `<div class="error">Error: ${data.error}</div>`;
+                        clearInterval(progressInterval);
+                    }
+                    
+                    // Update messages
+                    messages.innerHTML = '';
+                    data.messages.forEach(msg => {
+                        const msgDiv = document.createElement('div');
+                        msgDiv.className = 'message';
+                        msgDiv.textContent = msg;
+                        messages.appendChild(msgDiv);
+                    });
+                })
+                .catch(error => {
+                    console.error('Error fetching progress:', error);
+                });
+        }
+
+        function startSetup(step) {
+            const endpoint = step === 1 ? '/start_setup_1' : '/start_setup_2';
+            const containerId = step === 1 ? 'setup-1-container' : 'setup-2-container';
+            
+            // Show the appropriate container
+            document.getElementById(containerId).style.display = 'block';
+            
+            fetch(endpoint, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
                 }
-            }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.error) {
+                    document.getElementById(`status-${step}`).innerHTML = `<div class="error">Error: ${data.error}</div>`;
+                    return;
+                }
+                
+                currentProgressId = data.progress_id;
+                
+                // Start polling for progress
+                progressInterval = setInterval(() => {
+                    updateProgress(
+                        currentProgressId, 
+                        containerId, 
+                        `progress-${step}-fill`, 
+                        `status-${step}`, 
+                        `messages-${step}`
+                    );
+                }, 1000);
+                
+                // Initial progress update
+                updateProgress(
+                    currentProgressId, 
+                    containerId, 
+                    `progress-${step}-fill`, 
+                    `status-${step}`, 
+                    `messages-${step}`
+                );
+            })
+            .catch(error => {
+                console.error('Error starting setup:', error);
+                document.getElementById(`status-${step}`).innerHTML = '<div class="error">Error starting setup</div>';
+            });
         }
 
-        if (setup2 === 'false')
-        {
-            var eventSource = new EventSource('/setup_1');
+        // Auto-start the appropriate setup step
+        if (setup2 === 'false') {
+            startSetup(1);
+        } else {
+            startSetup(2);
         }
-        else
-        {
-            var eventSource = new EventSource('/setup_2');
-        }
-        eventSource.onmessage = handleStreamData;
-        eventSource.onerror = error => {
-            console.error('EventSource failed:', error);
-        };
     </script>
 </body>
 </html>
