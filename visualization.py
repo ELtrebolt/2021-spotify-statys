@@ -497,8 +497,32 @@ def shared_graph_top_songs_by_artist(UNIQUE_SONGS_DF, artist_name):
 
 def shared_graph_top_rank_table(df):
     '''Top Rank Table for CurrentlyPlaying and SingleSong'''
-    values = [['Artists', 'Song'], [df['artists_short_rank'], df['songs_short_rank']],
-                [df['artists_med_rank'], df['songs_med_rank']], [df['artists_long_rank'], df['songs_long_rank']]]
+    # Guard when rank columns are not yet computed (e.g., Setup 2 not completed)
+    required_columns = {
+        'artists_short_rank', 'songs_short_rank',
+        'artists_med_rank', 'songs_med_rank',
+        'artists_long_rank', 'songs_long_rank'
+    }
+    if df is None or len(df.index) == 0 or not required_columns.issubset(set(df.columns)):
+        return None
+    # Extract single-row scalar values
+    try:
+        artist_short = str(df['artists_short_rank'].iloc[0])
+        song_short = str(df['songs_short_rank'].iloc[0])
+        artist_med = str(df['artists_med_rank'].iloc[0])
+        song_med = str(df['songs_med_rank'].iloc[0])
+        artist_long = str(df['artists_long_rank'].iloc[0])
+        song_long = str(df['songs_long_rank'].iloc[0])
+    except Exception:
+        return None
+
+    # Two rows: Artists vs Song
+    row_labels = ['Artists', 'Song']
+    col_short = [artist_short, song_short]
+    col_med = [artist_med, song_med]
+    col_long = [artist_long, song_long]
+
+    values = [row_labels, col_short, col_med, col_long]
 
     fig = go.Figure(data=[go.Table(
         # columnorder = [1, 2, 3, 4],
@@ -542,10 +566,15 @@ class CurrentlyPlayingPage():
         song_df = self._unique_songs_df[self._unique_songs_df['artist'] == artist]
         self._song_df = song_df[song_df['name'] == song]
 
-        if len(self._song_df.index) > 0:
-            self._artist_genres = self._song_df.iloc[0]['genres']
-            self._song_genres = list(
-                {j for i in self._artist_genres for j in i})
+        # Genres may be missing if Setup 2 not completed; guard accordingly
+        has_genres_col = 'genres' in self._song_df.columns
+        if len(self._song_df.index) > 0 and has_genres_col:
+            try:
+                self._artist_genres = self._song_df.iloc[0]['genres']
+                self._song_genres = list({j for i in self._artist_genres for j in i})
+            except Exception:
+                self._artist_genres = []
+                self._song_genres = None
         else:
             self._artist_genres = []
             self._song_genres = None
@@ -705,32 +734,34 @@ class CurrentlyPlayingPage():
 
     # What percentage of songs in a playlist or among all playlists have these genres?
     def graph_song_genres_vs_avg(self, playlist=False):
-        if self._song_genres != None:
-            UNIQUE_SONGS_DF = self._unique_songs_df
-            ALL_SONGS_DF = self._all_songs_df
-            if playlist:
-                mask = UNIQUE_SONGS_DF['playlist'].apply(
-                    lambda x: self._playlist in x)
-                avg_df = UNIQUE_SONGS_DF[mask]
-                title = 'Percentage of Songs With Same Genres As ' + \
-                    self._artist + ' in ' + self._playlist
-                xaxis = '% of Songs in ' + self._playlist
-            else:
-                avg_df = ALL_SONGS_DF
-                title = 'Percentage of Songs With Same Genres As ' + \
-                    self._artist + ' Across All Playlists'
-                xaxis = '% of Songs with Genres'
+        if self._song_genres is None:
+            return None
+        UNIQUE_SONGS_DF = self._unique_songs_df
+        ALL_SONGS_DF = self._all_songs_df
+        # Require genres column to compute percentages
+        if 'genres' not in UNIQUE_SONGS_DF.columns or 'genres' not in ALL_SONGS_DF.columns:
+            return None
+        if playlist:
+            mask = UNIQUE_SONGS_DF['playlist'].apply(lambda x: self._playlist in x)
+            avg_df = UNIQUE_SONGS_DF[mask]
+            title = 'Percentage of Songs With Same Genres As ' + self._artist + ' in ' + self._playlist
+            xaxis = '% of Songs in ' + self._playlist
+        else:
+            avg_df = ALL_SONGS_DF
+            title = 'Percentage of Songs With Same Genres As ' + self._artist + ' Across All Playlists'
+            xaxis = '% of Songs with Genres'
 
-            percents = []
-            length = len(avg_df.index)
-            for g in self._song_genres:
-                mask = avg_df['genres'].apply(
-                    lambda x: g in {z for y in x for z in y})
+        percents = []
+        length = len(avg_df.index) if len(avg_df.index) > 0 else 1
+        for g in self._song_genres:
+            try:
+                mask = avg_df['genres'].apply(lambda x: g in {z for y in x for z in y})
                 percents.append(len(avg_df[mask].index)/length*100)
+            except Exception:
+                percents.append(0.0)
 
-            series = pd.Series(dict(zip(self._song_genres, percents)))
-            return _h_bar(series, title=title, xaxis=xaxis, percents=True, fixHeight=True)
-        return None
+        series = pd.Series(dict(zip(self._song_genres, percents)))
+        return _h_bar(series, title=title, xaxis=xaxis, percents=True, fixHeight=True)
 
     def graph_all_artists(self):
         artist_top_graphs = []
@@ -751,31 +782,29 @@ class HomePage():
         self._all_songs_df = pd.DataFrame(all_songs_df)
         self._unique_songs_df = pd.DataFrame(unique_songs_df)
 
-        self._graph_on_this_date()
-        self._graph_count_timeline()
-        self._graph_last_added()
-        self._get_library_totals()
+        # Generate page fragments in-memory
+        self._on_this_date = self._graph_on_this_date()
+        self._timeline = self._graph_count_timeline()
+        self._last_added = self._graph_last_added()
+        self._totals = self._get_library_totals()
 
     def load_on_this_date(self):
-        try:
-            return _load(f'{self._path}home_on_this_date.pkl')
-        except FileNotFoundError:
-            return 'No recorded data of adding songs to a playlist on this date'
+        return self._on_this_date
 
     def load_timeline(self):
-        return _load(f'{self._path}home_timeline.pkl')
+        return self._timeline
 
     def load_last_added(self):
-        return _load(f'{self._path}home_last_added.pkl')
+        return self._last_added
 
     def load_totals(self):
-        return _load(f'{self._path}home_totals.pkl')
+        return self._totals
 
     def load_first_times(self):
-        try:
-            return _load(f'{self._path}home_first_times.pkl')
-        except FileNotFoundError:
-            return 'Uh Oh'
+        # Always return a list so templates that iterate do not split characters
+        if hasattr(self, '_first_times') and isinstance(self._first_times, list) and len(self._first_times) > 0:
+            return self._first_times
+        return ['No recorded data of adding songs to a playlist on this date']
 
     def _graph_on_this_date(self):
         '''Output1 = Table = Year | Playlist | Songs Added
@@ -813,7 +842,7 @@ class HomePage():
                     first_times.append(
                         'You created the playlist ' + p + ' ' + str(years_ago) + ' years ago today!')
 
-        _dump(f'{self._path}home_first_times.pkl', first_times)    
+        self._first_times = first_times
         
         df = df.groupby(['playlist', 'year'], as_index=False)[
             ['name', 'artist']].agg(lambda x: ', '.join(x))
@@ -844,15 +873,13 @@ class HomePage():
         )
         ])
 
-        _dump(f'{self._path}home_on_this_date.pkl', Markup(fig.to_html(full_html=False)))
+        return Markup(fig.to_html(full_html=False))
 
 
     def _graph_count_timeline(self):
         fig = shared_graph_count_timelines(
             self._all_songs_df, title='<b>Timeline of Adding Songs to Playlists</b>', to_html=False)
-
-        _dump(f'{self._path}home_timeline.pkl',
-              Markup(fig.to_html(full_html=False)))
+        return Markup(fig.to_html(full_html=False))
 
     def _graph_last_added(self):
         ALL_SONGS_DF = self._all_songs_df
@@ -887,7 +914,7 @@ class HomePage():
 
         final = [distance, Markup(fig.to_html(
             full_html=False)), num_songs, len(df['playlist'])]
-        _dump(f'{self._path}home_last_added.pkl', final)
+        return final
 
     def _get_library_totals(self):
         ALL_SONGS_DF = self._all_songs_df
@@ -898,7 +925,7 @@ class HomePage():
                             UNIQUE_SONGS_DF['artist'].unique()),
                         len(UNIQUE_SONGS_DF['album'].unique())]
 
-        _dump(f'{self._path}home_totals.pkl', overall_data)
+        return overall_data
 
 
 # Overall Stats = About Me Page ----------------------------------------------------------------------------------------------
@@ -911,22 +938,23 @@ class AboutPage():
 
         self._artists = artists
 
-        self._graph_top_genres_by_followed_artists()
-        self._graph_top_songs_by_num_playlists()
-        self._graph_top_artists_and_albums_by_num_playlists()
-        self._graph_top_artists_and_albums_by_num_playlists(albums=True)
+        # Precompute page fragments in-memory
+        self._followed_artists = self._graph_top_genres_by_followed_artists()
+        self._overall_songs = self._graph_top_songs_by_num_playlists()
+        self._overall_artists = self._graph_top_artists_and_albums_by_num_playlists()
+        self._overall_albums = self._graph_top_artists_and_albums_by_num_playlists(albums=True)
 
     def load_followed_artists(self):
-        return _load(f'{self._path}about_followed_artists.pkl')
+        return self._followed_artists
 
     def load_top_songs(self):
-        return _load(f'{self._path}about_overall_songs.pkl')
+        return self._overall_songs
 
     def load_top_artists(self):
-        return _load(f'{self._path}about_overall_artists.pkl')
+        return self._overall_artists
 
     def load_top_albums(self):
-        return _load(f'{self._path}about_overall_albums.pkl')
+        return self._overall_albums
 
     def _graph_top_genres_by_followed_artists(self):
         d = defaultdict(int)
@@ -944,7 +972,7 @@ class AboutPage():
         series = pd.Series(data)
         final = _h_bar(series, title='Most Common Genres by Followed Artists', xaxis='# of Followed Artists',
                        hovertext=[', '.join(d2[i]) for i in data.keys()], yaxis='Genre', long_names=True)
-        _dump(f'{self._path}about_followed_artists.pkl', final)
+        return final
     
 
     def _graph_top_songs_by_num_playlists(self, buttons=5):
@@ -977,7 +1005,7 @@ class AboutPage():
                                    'Top ' + str(buttons*10) + ' Most Common Songs Across ' + \
                 str(len(self._all_songs_df['playlist'].unique())) + ' Playlists')
 
-        _dump(f'{self._path}about_overall_songs.pkl', Markup(final.to_html(full_html=False)))
+        return Markup(final.to_html(full_html=False))
 
 
     def _graph_top_artists_and_albums_by_num_playlists(self, buttons=5, albums=False):
@@ -1035,9 +1063,9 @@ class AboutPage():
                 str(len(ALL_SONGS_DF['playlist'].unique())) + ' Playlists')
 
         if albums:
-            _dump(f'{self._path}about_overall_albums.pkl', Markup(final.to_html(full_html=False)))
+            return Markup(final.to_html(full_html=False))
         else:
-            _dump(f'{self._path}about_overall_artists.pkl', Markup(final.to_html(full_html=False)))
+            return Markup(final.to_html(full_html=False))
 
 
 # Analyze Multiple Playlists Page ----------------------------------------------------------------------------------------------
@@ -1300,10 +1328,11 @@ class Top50Page():
         self._top_artists_pop = top_artists_pop
         self._unique_songs_df = pd.DataFrame(unique_songs_df)
 
-        self.graph_all_by_time_range()
+        # Precompute dynamic graph HTML in-memory
+        self._dynamic_graph = self.graph_all_by_time_range()
 
     def load_dynamic_graph(self):
-        return _load(f'{self._path}top50_graph.pkl')
+        return self._dynamic_graph
 
     def _graph_song_features_boxplot(self, time_range, name=None, color=None):
         x_data = FEATURE_COLS
@@ -1511,8 +1540,7 @@ class Top50Page():
         fig['layout']['yaxis3']['title'] = 'Genre'
         fig['layout']['yaxis4']['title'] = 'Genre'
 
-        _dump(f'{self._path}top50_graph.pkl',
-              Markup(fig.to_html(full_html=False)))
+        return Markup(fig.to_html(full_html=False))
 
 
 # Analyze Single Artist Page ----------------------------------------------------------------------------------------------
@@ -1976,33 +2004,31 @@ class MyPlaylistsPage():
         self._top_artists = top_artists
         self._top_songs = top_songs
 
-        self._graph_playlists_by_length()
-
-        self._graph_playlists_avg_features_boxplot()
-        self._graph_playlists_first_last_added()
-
-        self._graph_top_playlists_by_top_50_songs()
-        self._graph_top_playlists_by_top_artists()
-
-        self._graph_playlists_by_explicit()
+        # Precompute page fragments in-memory
+        self._playlists_by_length = self._graph_playlists_by_length()
+        self._avg_boxplot = self._graph_playlists_avg_features_boxplot()
+        self._first_last_added = self._graph_playlists_first_last_added()
+        self._top_playlists_by_songs = self._graph_top_playlists_by_top_50_songs()
+        self._top_playlists_by_artists = self._graph_top_playlists_by_top_artists()
+        self._playlists_by_explicit = self._graph_playlists_by_explicit()
 
     def load_playlists_by_length(self):
-        return _load(f'{self._path}playlists_by_length.pkl')
+        return self._playlists_by_length
     
     def load_avg_boxplot(self):
-        return _load(f'{self._path}playlists_avg_boxplot.pkl')
+        return self._avg_boxplot
     
     def load_first_last_added(self):
-        return _load(f'{self._path}playlists_first_last_added.pkl')
+        return self._first_last_added
     
     def load_playlists_by_artists(self):
-        return _load(f'{self._path}playlists_by_top_artists.pkl')
+        return self._top_playlists_by_artists
 
     def load_playlists_by_songs(self):
-        return _load(f'{self._path}playlists_by_top_songs.pkl')
+        return self._top_playlists_by_songs
 
     def load_playlists_by_explicit(self):
-        return _load(f'{self._path}playlists_by_explicit.pkl')
+        return self._playlists_by_explicit
 
     def _graph_playlists_by_length(self):
         labels = ['# Songs', 'Duration (Hours)']
@@ -2014,8 +2040,7 @@ class MyPlaylistsPage():
                                    '# Playlists',
                                    'Playlists\' Length by # Songs & Duration', 2)
 
-        _dump(f'{self._path}playlists_by_length.pkl',
-                Markup(fig.to_html(full_html=False)))
+        return Markup(fig.to_html(full_html=False))
         
 
     def _graph_num_songs_histogram(self):
@@ -2042,8 +2067,7 @@ class MyPlaylistsPage():
                                    '# Playlists',
                                    'Playlists by # and % Explicit Songs', 2)
 
-        _dump(f'{self._path}playlists_by_explicit.pkl',
-                Markup(fig.to_html(full_html=False)))
+        return Markup(fig.to_html(full_html=False))
         
 
     def _graph_num_explicit(self, percent=False):
@@ -2077,8 +2101,7 @@ class MyPlaylistsPage():
                                    '# Playlists',
                                    'Playlists by Popularity', 2)
 
-        _dump(f'{self._path}playlists_avg_boxplot.pkl',
-                Markup(fig.to_html(full_html=False)))
+        return Markup(fig.to_html(full_html=False))
 
     def _graph_playlists_first_last_added(self):
         df = self._all_songs_df.groupby('playlist')['date_added'].agg([('CreatedDate', 'min'), ('LastAddedDate', 'max')]).reset_index()
@@ -2091,8 +2114,7 @@ class MyPlaylistsPage():
         fig.update_layout(height=len(df)*30)
 
         final = Markup(fig.to_html(full_html=False))
-        _dump(f'{self._path}playlists_first_last_added.pkl', final)
-
+        return final
     
     def _graph_top_playlists_by_top_50_songs(self):
         ALL_SONGS_DF = self._all_songs_df
@@ -2115,8 +2137,7 @@ class MyPlaylistsPage():
                             size="# Top Long Term Songs", hover_name='Playlist')
         title = 'Top Playlists by Number of Top 50 Songs In Them'
         fig.update_layout(title_text=title)
-        _dump(f'{self._path}playlists_by_top_songs.pkl',
-                Markup(fig.to_html(full_html=False)))
+        return Markup(fig.to_html(full_html=False))
 
 
     def _graph_top_playlists_by_top_n_artists(self, artists=10):
@@ -2160,6 +2181,5 @@ class MyPlaylistsPage():
                                    '# Songs From Med. Term Top Artists',
                                    'Top Playlists by Number of Top N Artists\' Songs')
 
-        _dump(f'{self._path}playlists_by_top_artists.pkl',
-                Markup(fig.to_html(full_html=False)))
+        return Markup(fig.to_html(full_html=False))
         

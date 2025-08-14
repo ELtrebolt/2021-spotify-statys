@@ -20,9 +20,11 @@ import base64
 import hashlib
 import hmac
 from flask_caching import Cache
-from flask import Flask, request, redirect, render_template, Response, jsonify, make_response, g
+from flask_session import Session
+from flask import Flask, request, redirect, render_template, Response, jsonify, make_response, g, session
 from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
+from spotipy.cache_handler import CacheFileHandler
 
 load_dotenv()
 
@@ -47,8 +49,31 @@ def _load(path, name):
 app = Flask(__name__, template_folder='templates')
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 app.config['PREFERRED_URL_SCHEME'] = 'https'
-app.config['CACHE_TYPE'] = 'SimpleCache'
+
+# Create local folders for session and cache persistence
+session_folder = './.flask_session/'
+cache_fs_folder = './.flask_cache/'
+for d in [session_folder, cache_fs_folder]:
+    if not os.path.exists(d):
+        os.makedirs(d)
+
+# Flask secret key (use env var in production)
+app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', SECRET_KEY)
+
+# Server-side sessions (filesystem)
+app.config['SESSION_TYPE'] = 'filesystem'
+app.config['SESSION_FILE_DIR'] = session_folder
+app.config['SESSION_PERMANENT'] = False
+app.config['SESSION_USE_SIGNER'] = True
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['SESSION_COOKIE_SECURE'] = os.getenv('SESSION_COOKIE_SECURE', 'False').lower() in ('1', 'true', 't', 'yes', 'y', 'on')
+Session(app)
+
+# File-system caching so it persists across reloads
+app.config['CACHE_TYPE'] = 'FileSystemCache'
 app.config['CACHE_DEFAULT_TIMEOUT'] = 300
+app.config['CACHE_DIR'] = cache_fs_folder
 cache = Cache(app)
 cache.init_app(app)
 
@@ -57,12 +82,7 @@ cache.init_app(app)
 # os.environ['SPOTIPY_CLIENT_ID'] = CLIENT_ID
 # os.environ['SPOTIPY_CLIENT_SECRET'] = CLIENT_SECRET
 
-# Creating Cache Folders
-cache_folder = './.spotify_caches/'
-cache_folder2 = './.sp_caches/'
-for i in [cache_folder, cache_folder2]:
-    if not os.path.exists(i):
-        os.makedirs(i)
+# Removed legacy cache folders (.spotify_caches, .sp_caches) as unused
 
 # -------------------------------Authentication Helpers-----------------------------------------------
 
@@ -129,15 +149,11 @@ def verify_secure_cookie(cookie_value):
         return None
 
 def get_current_user():
-    """Get current user info from cookie"""
-    token_cookie = request.cookies.get('spotify_token')
-    if not token_cookie:
-        return None
-    
-    access_token = verify_secure_cookie(token_cookie)
+    """Get current user info from server-side session."""
+    access_token = session.get('access_token')
     if not access_token:
         return None
-    
+
     try:
         spotify = spotipy.Spotify(auth=access_token)
         user_info = spotify.me()
@@ -165,14 +181,14 @@ def start_setup_1():
     if not os.path.exists(user_path):
         os.makedirs(user_path)
     
-    # Check if setup data exists
-    setup_file = f'{user_path}setup_data.pkl'
-    if not os.path.exists(setup_file):
+    # Check if setup data exists (JSON)
+    setup_json = f'{user_path}setup_data.json'
+    if not os.path.exists(setup_json):
         return jsonify({'error': 'Setup data not found'}), 400
     
     # Load setup data
-    with open(setup_file, 'rb') as f:
-        setup_data = pickle.load(f)
+    with open(setup_json, 'r', encoding='utf-8') as f:
+        setup_data = json.load(f)
     
     playlist_dict = setup_data['playlist_dict']
     
@@ -221,16 +237,16 @@ def start_setup_1():
                     progress_data[progress_id]['messages'].append(f'Error processing {name}: {str(playlist_error)}')
                     continue
             
-            # Save the dataframe
+            # Save the dataframe (NDJSON only)
             if not ALL_SONGS_DF.empty:
                 if 'index' in ALL_SONGS_DF.columns:
                     ALL_SONGS_DF.drop(columns='index', inplace=True)
-                ALL_SONGS_DF.to_pickle(f"{user_path}all_songs_df.pkl")
+                ALL_SONGS_DF.to_json(f"{user_path}all_songs.ndjson.gz", orient='records', lines=True, compression='gzip')
                 
-                # Update status
+                # Update status (JSON)
                 status = {'SETUP1': True, 'SETUP2': False, 'SETUP3': False}
-                with open(f'{user_path}collection.pkl', 'wb') as f:
-                    pickle.dump(status, f)
+                with open(f'{user_path}setup_status.json', 'w', encoding='utf-8') as f:
+                    json.dump(status, f)
                 
                 progress_data[progress_id]['status'] = 'complete'
                 progress_data[progress_id]['complete'] = True
@@ -256,12 +272,12 @@ def start_setup_2():
         return jsonify({'error': 'Not authenticated'}), 401
     
     user_path = f'.data/{user["id"]}/'
-    all_songs_df_file = f'{user_path}all_songs_df.pkl'
+    all_songs_df_file = f'{user_path}all_songs.ndjson.gz'
     
     if not os.path.exists(all_songs_df_file):
         return jsonify({'error': 'Setup 1 not completed'}), 400
     
-    all_songs_df = pd.read_pickle(all_songs_df_file)
+    all_songs_df = pd.read_json(all_songs_df_file, lines=True, compression='gzip')
     
     progress_id = str(uuid.uuid4())
     progress_data[progress_id] = {
@@ -308,36 +324,11 @@ def start_setup_2():
                 import time
                 time.sleep(0.2)
             
-            # Handle page setup separately
-            UNIQUE_SONGS_DF = pd.read_pickle(f'{user_path}unique_songs_df.pkl')
-            
-            # Setup pages
-            from visualization import HomePage, AboutPage, Top50Page, MyPlaylistsPage
-            
-            home_page = HomePage(user_path, all_songs_df, UNIQUE_SONGS_DF)
-            with open(f'{user_path}home_page.pkl', 'wb') as f:
-                pickle.dump(home_page, f)
-            
-            artists = user['spotify_client'].current_user_followed_artists()['artists']['items']
-            about_page = AboutPage(user_path, all_songs_df, UNIQUE_SONGS_DF, artists)
-            with open(f'{user_path}about_page.pkl', 'wb') as f:
-                pickle.dump(about_page, f)
-            
-            top_artists = _load(user_path, 'top_artists.pkl')
-            top_artists_pop = _load(user_path, 'top_artists_pop.pkl')
-            top50_page = Top50Page(user_path, UNIQUE_SONGS_DF, top_artists, top_artists_pop)
-            with open(f'{user_path}top50_page.pkl', 'wb') as f:
-                pickle.dump(top50_page, f)
-            
-            top_songs = _load(user_path, 'top_songs.pkl')
-            myplaylists_page = MyPlaylistsPage(user_path, all_songs_df, top_artists, top_songs)
-            with open(f'{user_path}myplaylists_page.pkl', 'wb') as f:
-                pickle.dump(myplaylists_page, f)
-            
-            # Update status
+            # Page setup no longer writes pickled page objects; views compute on demand and cache via Flask-Caching
+            # Update status (JSON)
             status = {'SETUP1': True, 'SETUP2': True, 'SETUP3': False}
-            with open(f'{user_path}collection.pkl', 'wb') as f:
-                pickle.dump(status, f)
+            with open(f'{user_path}setup_status.json', 'w', encoding='utf-8') as f:
+                json.dump(status, f)
             
             progress_data[progress_id]['status'] = 'complete'
             progress_data[progress_id]['complete'] = True
@@ -373,49 +364,47 @@ def index():
 	
 	# User is authenticated - check setup status
 	user_path = f'.data/{user["id"]}/'
-	
-	# Check if setup data exists
-	setup_file = f'{user_path}setup_data.pkl'
-	if not os.path.exists(setup_file):
-		# First time user - need to collect playlists
+
+	# Check if setup data exists; if not, run Setup 1 immediately and persist JSON
+	setup_json = f'{user_path}setup_data.json'
+	if not os.path.exists(setup_json):
 		try:
 			temp_session = {'SPOTIFY': user['spotify_client']}
 			temp_setup = SetupData(temp_session)
-			
-			# Save setup data
-			setup_data = {
-				'user_id': user['id'],
-				'playlist_dict': temp_setup.PLAYLIST_DICT
-			}
-			
+			setup_data = {'user_id': user['id'], 'playlist_dict': temp_setup.PLAYLIST_DICT}
 			if not os.path.exists(user_path):
 				os.makedirs(user_path)
-			
-			with open(setup_file, 'wb') as f:
-				pickle.dump(setup_data, f)
-			
-			return render_template('setup.html', setup2="false")
-			
+			with open(setup_json, 'w', encoding='utf-8') as f:
+				json.dump(setup_data, f)
 		except Exception as e:
 			return f'<h3>Error setting up: {str(e)}</h3>'
-	
-	# Check collection status
-	collection_file = f'{user_path}collection.pkl'
-	if not os.path.exists(collection_file):
-		return render_template('setup.html', setup2="false")
-	
-	status = _load(user_path, 'collection.pkl')
-	
-	if not status['SETUP1']:
-		return render_template('setup.html', setup2="false")
 
-	if status['SETUP1'] and not status['SETUP2']:
+	# Check collection status (JSON)
+	collection_json = f'{user_path}setup_status.json'
+	if not os.path.exists(collection_json):
+		# If Setup 1 artifact exists (NDJSON), mark and kick off setup 2
+		all_songs_path = f'{user_path}all_songs.ndjson.gz'
+		if os.path.exists(all_songs_path):
+			status = {'SETUP1': True, 'SETUP2': False, 'SETUP3': False}
+			with open(collection_json, 'w', encoding='utf-8') as f:
+				json.dump(status, f)
+		else:
+			return render_template('setup.html', setup2="false")
+
+	with open(collection_json, 'r', encoding='utf-8') as f:
+		status = json.load(f)
+
+	# If SETUP1 done but SETUP2 not done, redirect to setup 2 page
+	if status.get('SETUP1') and not status.get('SETUP2'):
 		return render_template('setup.html', setup2="true")
 
-	if status['SETUP2'] and not status['SETUP3']:
+	# If SETUP2 is complete and artifacts exist, go home; otherwise, keep user on setup
+	all_songs_path = f'{user_path}all_songs.ndjson.gz'
+	unique_songs_path = f'{user_path}unique_songs.ndjson.gz'
+	if status.get('SETUP2') and os.path.exists(all_songs_path) and os.path.exists(unique_songs_path):
 		return redirect('/home')
-
-	return redirect('/home')
+	else:
+		return render_template('setup.html', setup2="true" if status.get('SETUP1') else "false")
 
 # Spotify OAuth callback
 @app.route('/callback')
@@ -432,61 +421,122 @@ def callback():
 			return '<h3>Failed to get access token</h3>'
 		
 		access_token = token_info['access_token']
-		
-		# Get user info (validates token too)
+
+		# Validate token and bind user session
 		user_id = get_user_id_from_token(access_token)
 		if not user_id:
 			return '<h3>Failed to get user info</h3>'
-		
-		# Create signed, base64-encoded cookie matching verify_secure_cookie
-		signature = hmac.new(SECRET_KEY.encode(), access_token.encode(), hashlib.sha256).hexdigest()
-		cookie_value = f"{access_token}.{signature}"
-		encoded = base64.b64encode(cookie_value.encode()).decode()
-		
-		response = make_response(redirect('/'))
-		response.set_cookie('spotify_token', encoded, max_age=86400, httponly=True, secure=False)
-		
-		return response
+
+		# Persist Spotipy token cache under per-user .data directory
+		user_path = f'.data/{user_id}/'
+		if not os.path.exists(user_path):
+			os.makedirs(user_path)
+		cache_handler = CacheFileHandler(cache_path=f"{user_path}.cache")
+		cache_handler.save_token_to_cache(token_info)
+		# Clean up default root .cache if Spotipy created it
+		try:
+			default_cache_path = '.cache'
+			if os.path.exists(default_cache_path):
+				os.remove(default_cache_path)
+		except Exception:
+			pass
+
+		session['access_token'] = access_token
+		# Optionally store refresh token/expiry for later phases
+		if 'refresh_token' in token_info:
+			session['refresh_token'] = token_info['refresh_token']
+		if 'expires_at' in token_info:
+			session['expires_at'] = token_info['expires_at']
+
+		return redirect('/')
 		
 	except Exception as e:
 		return f'<h3>Authentication error: {str(e)}</h3>'
 
 # Home Page
+def _cache_key_home():
+	user = get_current_user()
+	uid = user['id'] if user else 'anon'
+	if user:
+		user_path = f'.data/{uid}/'
+		all_ready = os.path.exists(f'{user_path}all_songs.ndjson.gz')
+		uniq_ready = os.path.exists(f'{user_path}unique_songs.ndjson.gz')
+		ready = '1' if all_ready and uniq_ready else '0'
+	else:
+		ready = '0'
+	return f"home:{uid}:{ready}"
+
 @app.route('/home')
-@cache.cached(timeout=300)
+@cache.cached(timeout=300, key_prefix=_cache_key_home)
 def home():
-    user = get_current_user()
-    if not user:
-        return redirect('/')
-    
-    user_path = f'.data/{user["id"]}/'
-    
-    # Load home page data
-    home_page_file = f'{user_path}home_page.pkl'
-    if not os.path.exists(home_page_file):
-        return redirect('/')
+	user = get_current_user()
+	if not user:
+		return redirect('/')
+	
+	user_path = f'.data/{user["id"]}/'
+	
+	# Read data from filesystem (NDJSON, gzipped)
+	all_songs_path = f'{user_path}all_songs.ndjson.gz'
+	unique_songs_path = f'{user_path}unique_songs.ndjson.gz'
+	if not os.path.exists(all_songs_path) or not os.path.exists(unique_songs_path):
+		return redirect('/')
 
-    home_page = _load(user_path, 'home_page.pkl')
-    
-    on_this_date = home_page.load_on_this_date()
-    full_timeline = home_page.load_timeline()
-    last_added_playlist = home_page.load_last_added()
-    overall_data = home_page.load_totals()
-    first_times = home_page.load_first_times()
+	all_songs_df = pd.read_json(all_songs_path, lines=True, compression='gzip')
+	unique_songs_df = pd.read_json(unique_songs_path, lines=True, compression='gzip')
 
-    return render_template('home.html', collection=False,
-                           name=user['display_name'], today=str(
-                               datetime.datetime.now().astimezone().date())[5:],
-                           on_this_date=on_this_date,
-                           full_timeline=full_timeline,
-                           last_added_playlist=last_added_playlist,
-                           overall_data=overall_data, first_times=first_times)
+	# Build page artifacts in-memory (no pickles)
+	from visualization import HomePage
+	home_page = HomePage(user_path, all_songs_df, unique_songs_df)
+
+	on_this_date = home_page.load_on_this_date()
+	full_timeline = home_page.load_timeline()
+	last_added_playlist = home_page.load_last_added()
+	overall_data = home_page.load_totals()
+	first_times = home_page.load_first_times()
+
+	return render_template('home.html', collection=False,
+						   name=user['display_name'], today=str(
+							   datetime.datetime.now().astimezone().date())[5:],
+						   on_this_date=on_this_date,
+						   full_timeline=full_timeline,
+						   last_added_playlist=last_added_playlist,
+						   overall_data=overall_data, first_times=first_times)
 
 # Sign out
 @app.route('/sign-out')
 def sign_out():
+    # Capture user before clearing session
+    user = get_current_user()
+    user_id = user['id'] if user else None
+
+    # Prepare redirect response and clear session cookie
     response = make_response(redirect('/'))
-    response.delete_cookie('spotify_token')
+    try:
+        response.delete_cookie(app.config.get('SESSION_COOKIE_NAME', 'session'))
+    except Exception:
+        pass
+
+    # Clear server-side session
+    try:
+        session.clear()
+    except Exception:
+        pass
+
+    # Delete per-user data directory and Spotipy cache
+    try:
+        if user_id:
+            user_path = f'.data/{user_id}/'
+            if os.path.exists(user_path):
+                shutil.rmtree(user_path, ignore_errors=True)
+    except Exception:
+        pass
+
+    # Clear app cache (includes any user-specific cached pages)
+    try:
+        cache.clear()
+    except Exception:
+        pass
+
     return response
 
 # Currently Playing Page
@@ -505,38 +555,38 @@ def currently_playing():
     song = track['item']['name']
     song_id = track['item']['id']
     
-    # Load user data
+    # Load user data (NDJSON presence indicates setup done)
     user_path = f'.data/{user["id"]}/'
-    setup_file = f'{user_path}setup_data.pkl'
-    collection_file = f'{user_path}collection.pkl'
-    
-    if not os.path.exists(setup_file) or not os.path.exists(collection_file):
+    all_songs_path = f'{user_path}all_songs.ndjson.gz'
+    unique_songs_path = f'{user_path}unique_songs.ndjson.gz'
+    if not os.path.exists(all_songs_path) or not os.path.exists(unique_songs_path):
         return "<h3>Please complete setup first</h3>"
     
-    # Load setup and collection data
-    with open(setup_file, 'rb') as f:
-        setup_data = pickle.load(f)
+    # Load required data (NDJSON, gzipped)
+    all_songs_df = pd.read_json(f'{user_path}all_songs.ndjson.gz', lines=True, compression='gzip')
+    unique_songs_df = pd.read_json(f'{user_path}unique_songs.ndjson.gz', lines=True, compression='gzip')
     
-    status = _load(user_path, 'collection.pkl')
-    
-    if not status['SETUP2']:
-        return "<h3>Please complete setup first</h3>"
-    
-    # Load required data
-    all_songs_df = pd.read_pickle(f'{user_path}all_songs_df.pkl')
-    unique_songs_df = pd.read_pickle(f'{user_path}unique_songs_df.pkl')
-    
-    # Get playlist info
-    playlist_dict = setup_data['playlist_dict']
-    playlist_dict2 = {value: key for key, value in playlist_dict.items()}
+    # Get playlist info fresh (id -> name)
+    id_to_name = {}
+    try:
+        results = user['spotify_client'].current_user_playlists(limit=50, offset=0)
+        id_to_name.update({p['id']: p['name'] for p in results['items']})
+        total = results.get('total', len(results['items']))
+        offset = 50
+        while offset < total:
+            more = user['spotify_client'].current_user_playlists(limit=50, offset=offset)
+            id_to_name.update({p['id']: p['name'] for p in more['items']})
+            offset += 50
+    except Exception:
+        pass
 
     # See if User is playing one of their playlists
     playlist = None
-    if track['context'] and track['context']['uri']:
+    if track.get('context') and track['context'].get('uri'):
         playlist_id = track['context']['uri']
         playlist_id = playlist_id[playlist_id.rfind(':')+1:]
-        if playlist_id in playlist_dict.values():
-            playlist = playlist_dict2[playlist_id]
+        if playlist_id in id_to_name:
+            playlist = id_to_name[playlist_id]
     
     artists_url = artist.replace(', ', '/')
 
@@ -584,7 +634,18 @@ def about_me():
     if not os.path.exists(user_path):
         return redirect('/')
 
-    page = _load(user_path, 'about_page.pkl')
+    # Load runtime data from NDJSON
+    all_songs_path = f'{user_path}all_songs.ndjson.gz'
+    unique_songs_path = f'{user_path}unique_songs.ndjson.gz'
+    if not (os.path.exists(all_songs_path) and os.path.exists(unique_songs_path)):
+        return redirect('/')
+    all_songs_df = pd.read_json(all_songs_path, lines=True, compression='gzip')
+    unique_songs_df = pd.read_json(unique_songs_path, lines=True, compression='gzip')
+
+    # Fetch followed artists live (keeps data fresh)
+    artists = user['spotify_client'].current_user_followed_artists()['artists']['items']
+    from visualization import AboutPage
+    page = AboutPage(user_path, all_songs_df, unique_songs_df, artists)
 
     top_genres_by_followed_artists_bar = page.load_followed_artists()
     top_songs_by_num_playlists = page.load_top_songs()
@@ -597,20 +658,47 @@ def about_me():
                            top_albums_by_all_playlists=top_albums_by_all_playlists)
 
 # Top 50 Page
+def _cache_key_top50():
+	user = get_current_user()
+	uid = user['id'] if user else 'anon'
+	if user:
+		user_path = f'.data/{uid}/'
+		unique_path = f'{user_path}unique_songs.ndjson.gz'
+		ready = '1' if os.path.exists(unique_path) else '0'
+		mtime = str(os.path.getmtime(unique_path)) if os.path.exists(unique_path) else '0'
+	else:
+		ready = '0'
+		mtime = '0'
+	return f"top50:{uid}:{ready}:{mtime}"
+
 @app.route('/top-50')
-@cache.cached(timeout=300)
+@cache.cached(timeout=300, key_prefix=_cache_key_top50)
 def top_50():
     user = get_current_user()
     if not user:
         return redirect('/')
     
     user_path = f'.data/{user["id"]}/'
-    top50_page_file = f'{user_path}top50_page.pkl'
-    
-    if not os.path.exists(top50_page_file):
+    unique_songs_path = f'{user_path}unique_songs.ndjson.gz'
+    if not os.path.exists(unique_songs_path):
         return redirect('/')
 
-    page = _load(user_path, 'top50_page.pkl')
+    unique_songs_df = pd.read_json(unique_songs_path, lines=True, compression='gzip')
+
+    # Load Top 50 inputs (prefer JSON)
+    try:
+        with open(f'{user_path}top_artists.json', 'r', encoding='utf-8') as f:
+            top_artists = json.load(f)
+    except Exception:
+        top_artists = []
+    try:
+        with open(f'{user_path}top_artists_pop.json', 'r', encoding='utf-8') as f:
+            top_artists_pop = json.load(f)
+    except Exception:
+        top_artists_pop = []
+
+    from visualization import Top50Page
+    page = Top50Page(user_path, unique_songs_df, top_artists, top_artists_pop)
     plots_by_time_range = page.load_dynamic_graph()
 
     return render_template('top_50.html', plots_by_time_range=plots_by_time_range)
@@ -624,12 +712,28 @@ def my_playlists():
         return redirect('/')
     
     user_path = f'.data/{user["id"]}/'
-    playlists_page_file = f'{user_path}myplaylists_page.pkl'
-    
-    if not os.path.exists(playlists_page_file):
+    all_songs_path = f'{user_path}all_songs.ndjson.gz'
+    unique_songs_path = f'{user_path}unique_songs.ndjson.gz'
+    if not (os.path.exists(all_songs_path) and os.path.exists(unique_songs_path)):
         return redirect('/')
 
-    page = _load(user_path, 'myplaylists_page.pkl')
+    all_songs_df = pd.read_json(all_songs_path, lines=True, compression='gzip')
+    unique_songs_df = pd.read_json(unique_songs_path, lines=True, compression='gzip')
+
+    # Load Top 50 lists (prefer JSON, fallback to pickle for backward compat)
+    try:
+        with open(f'{user_path}top_artists.json', 'r', encoding='utf-8') as f:
+            top_artists = json.load(f)
+    except Exception:
+        top_artists = []
+    try:
+        with open(f'{user_path}top_songs.json', 'r', encoding='utf-8') as f:
+            top_songs = json.load(f)
+    except Exception:
+        top_songs = []
+
+    from visualization import MyPlaylistsPage
+    page = MyPlaylistsPage(user_path, all_songs_df, top_artists, top_songs)
 
     playlists_by_length = page.load_playlists_by_length()
     playlists_by_explicit = page.load_playlists_by_explicit()
@@ -653,23 +757,28 @@ def search():
         return redirect('/')
 
     user_path = f'.data/{user["id"]}/'
-    setup_file = f'{user_path}setup_data.pkl'
-    collection_file = f'{user_path}collection.pkl'
-    if not os.path.exists(setup_file) or not os.path.exists(collection_file):
+    setup_json = f'{user_path}setup_data.json'
+    collection_json = f'{user_path}setup_status.json'
+    if not os.path.exists(setup_json) or not os.path.exists(collection_json):
         return redirect('/')
 
-    with open(setup_file, 'rb') as f:
-        setup_data = pickle.load(f)
+    with open(setup_json, 'r', encoding='utf-8') as f:
+        setup_data = json.load(f)
     playlist_dict = setup_data['playlist_dict']  # name -> id
     lowercase_playlists = {name.lower(): pid for name, pid in playlist_dict.items()}
 
     # Data needed for ID/artist checks
-    all_songs_df = pd.read_pickle(f'{user_path}all_songs_df.pkl') if os.path.exists(f'{user_path}all_songs_df.pkl') else pd.DataFrame()
-    unique_artist_names_path = f'{user_path}unique_artist_names.pkl'
+    all_songs_df_path = f'{user_path}all_songs.ndjson.gz'
+    all_songs_df = pd.read_json(all_songs_df_path, lines=True, compression='gzip') if os.path.exists(all_songs_df_path) else pd.DataFrame()
+    unique_artist_names_path = f'{user_path}unique_artist_names.json'
     lowercase_artists = {}
     if os.path.exists(unique_artist_names_path):
-        unique_artist_names = pd.read_pickle(unique_artist_names_path)
-        lowercase_artists = {n.lower(): n for n in unique_artist_names}
+        try:
+            with open(unique_artist_names_path, 'r', encoding='utf-8') as f:
+                unique_artist_names = json.load(f)
+            lowercase_artists = {n.lower(): n for n in unique_artist_names}
+        except Exception:
+            lowercase_artists = {}
 
     if request.method == 'POST':
         q = request.form.get('query', '')
@@ -723,16 +832,16 @@ def analyze_playlists(playlist_ids):
         return redirect('/')
 
     user_path = f'.data/{user["id"]}/'
-    setup_file = f'{user_path}setup_data.pkl'
-    if not os.path.exists(setup_file):
+    setup_json = f'{user_path}setup_data.json'
+    if not os.path.exists(setup_json):
         return 'Setup not found'
-    with open(setup_file, 'rb') as f:
-        setup_data = pickle.load(f)
+    with open(setup_json, 'r', encoding='utf-8') as f:
+        setup_data = json.load(f)
     playlist_dict = setup_data['playlist_dict']  # name -> id
     id_to_name = {pid: name for name, pid in playlist_dict.items()}
 
-    all_songs_df = pd.read_pickle(f'{user_path}all_songs_df.pkl')
-    unique_songs_df = pd.read_pickle(f'{user_path}unique_songs_df.pkl')
+    all_songs_df = pd.read_json(f'{user_path}all_songs.ndjson.gz', lines=True, compression='gzip')
+    unique_songs_df = pd.read_json(f'{user_path}unique_songs.ndjson.gz', lines=True, compression='gzip')
 
     ids = playlist_ids.split('/')
     if len(ids) == 1:
@@ -782,8 +891,8 @@ def analyze_artists(artist_names):
         return redirect('/')
 
     user_path = f'.data/{user["id"]}/'
-    all_songs_df = pd.read_pickle(f'{user_path}all_songs_df.pkl')
-    unique_songs_df = pd.read_pickle(f'{user_path}unique_songs_df.pkl')
+    all_songs_df = pd.read_json(f'{user_path}all_songs.ndjson.gz', lines=True, compression='gzip')
+    unique_songs_df = pd.read_json(f'{user_path}unique_songs.ndjson.gz', lines=True, compression='gzip')
 
     artists_list = [i for i in artist_names.split('/')]
     if len(artists_list) == 1:
@@ -828,8 +937,8 @@ def analyze_songs(song_ids):
         return redirect('/')
 
     user_path = f'.data/{user["id"]}/'
-    all_songs_df = pd.read_pickle(f'{user_path}all_songs_df.pkl')
-    unique_songs_df = pd.read_pickle(f'{user_path}unique_songs_df.pkl')
+    all_songs_df = pd.read_json(f'{user_path}all_songs.ndjson.gz', lines=True, compression='gzip')
+    unique_songs_df = pd.read_json(f'{user_path}unique_songs.ndjson.gz', lines=True, compression='gzip')
 
     ids = song_ids.split('/')
     if len(ids) == 1:

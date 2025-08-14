@@ -3,6 +3,8 @@ from datetime import datetime
 import pandas as pd
 import pickle
 import os
+import json
+import gzip
 from visualization import HomePage, AboutPage, Top50Page, MyPlaylistsPage
 import traceback
 
@@ -39,7 +41,35 @@ class SetupData():
             os.makedirs(self.path)
 
         status = {'SETUP1': False, 'SETUP2': False, 'SETUP3': False}
-        _dump(f'{self.path}collection.pkl', status)
+        try:
+            with open(os.path.join(self.path, 'setup_status.json'), 'w', encoding='utf-8') as f:
+                json.dump(status, f)
+        except Exception:
+            pass
+
+        # Filesystem-first metadata (JSON). Keep pickles for backward-compat.
+        meta_path = os.path.join(self.path, 'meta.json')
+        try:
+            display_name = self.SPOTIFY.me().get('display_name', '')
+        except Exception:
+            display_name = ''
+        meta = {
+            'user_id': self.USER_ID,
+            'display_name': display_name,
+            'last_login': datetime.utcnow().isoformat() + 'Z'
+        }
+        self._atomic_json_write(meta_path, meta)
+        self._atomic_json_write(os.path.join(self.path, 'setup_status.json'), {
+            'setup1': False,
+            'setup2': False,
+            'setup3': False
+        })
+
+    def _atomic_json_write(self, path, obj):
+        tmp = path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(obj, f, ensure_ascii=False)
+        os.replace(tmp, path)
 
 
     def _get_50_playlist_dict(self, playlists):
@@ -134,6 +164,32 @@ class SetupData():
 
         return song_meta_df
 
+    def _write_tracks_relations(self, all_songs_df: pd.DataFrame):
+        """Write compressed NDJSON files for tracks and playlist relations."""
+        # Tracks (deduplicated by id)
+        track_cols = ['id', 'name', 'album', 'explicit', 'popularity', 'duration']
+        tracks = (all_songs_df[track_cols]
+                  .drop_duplicates(subset=['id'])
+                  .sort_values('id'))
+        tracks_path = os.path.join(self.path, 'tracks.ndjson.gz')
+        self._atomic_gzip_ndjson_write(tracks_path, tracks)
+
+        # Relations: playlist -> track with added_at
+        rel_cols = ['playlist', 'id', 'date_added']
+        rel = all_songs_df[rel_cols].rename(columns={'id': 'track_id', 'date_added': 'added_at'})
+        rel_path = os.path.join(self.path, 'playlist_tracks.ndjson.gz')
+        self._atomic_gzip_ndjson_write(rel_path, rel)
+
+    def _atomic_gzip_ndjson_write(self, path: str, df: pd.DataFrame):
+        """Atomically write a DataFrame as gzipped NDJSON."""
+        tmp = path + '.tmp'
+        with gzip.open(tmp, 'wt', encoding='utf-8') as f:
+            # Use orient='records', lines=True output
+            for record in df.to_dict(orient='records'):
+                f.write(json.dumps(record, ensure_ascii=False))
+                f.write('\n')
+        os.replace(tmp, path)
+
 
     # Get all of a playlists songs
     def _get_playlist(self, name, _id):
@@ -180,10 +236,11 @@ class SetupData():
             # Yung Yi had the problem of 'index' not found in axis
             if 'index' in ALL_SONGS_DF.columns:
                 ALL_SONGS_DF.drop(columns='index', inplace=True)
-            ALL_SONGS_DF.to_pickle(f"{self.path}all_songs_df.pkl")
+            # Write compact filesystem-friendly files
+            self._write_tracks_relations(ALL_SONGS_DF)
 
             status = {'SETUP1': True, 'SETUP2': False, 'SETUP3': False}
-            _dump(f'{self.path}collection.pkl', status)
+            self._atomic_json_write(os.path.join(self.path, 'setup_status.json'), status)
 
             yield 'data:REDIRECT_URI=' + REDIRECT_URI + '\n\n'
         except Exception as e:
@@ -192,7 +249,7 @@ class SetupData():
 
     def _get_unique_songs_df(self):
         # Changing cols will be condensed into a list = ex: unique song will have a col "playlist" = [playlist1, playlist2]
-        ALL_SONGS_DF = pd.read_pickle(f'{self.path}all_songs_df.pkl')
+        ALL_SONGS_DF = pd.read_json(f'{self.path}all_songs.ndjson.gz', lines=True, compression='gzip')
 
         changing_cols = ['id', 'playlist', 'date_added']
         UNIQUE_SONGS_DF = ALL_SONGS_DF.groupby([i for i in ALL_SONGS_DF.columns if i not in changing_cols], as_index=False)[
@@ -212,7 +269,8 @@ class SetupData():
         UNIQUE_SONGS_DF['num_playlists'] = [
             len(i) for i in UNIQUE_SONGS_DF['playlist']]
 
-        UNIQUE_SONGS_DF.to_pickle(f"{self.path}unique_songs_df.pkl")
+        # Also write compressed NDJSON for filesystem mode
+        self._atomic_gzip_ndjson_write(os.path.join(self.path, 'unique_songs.ndjson.gz'), UNIQUE_SONGS_DF)
 
 
     def _get_top_artists(self):
@@ -226,14 +284,17 @@ class SetupData():
         TOP_ARTISTS_NAMES = [list(TOP_ARTISTS_SHORT.keys()), list(TOP_ARTISTS_MED.keys()), list(TOP_ARTISTS_LONG.keys())]
         TOP_ARTISTS_POPULARITY = [list(TOP_ARTISTS_SHORT.values()), list(TOP_ARTISTS_MED.values()), list(TOP_ARTISTS_LONG.values())]
 
-        _dump(f'{self.path}top_artists.pkl', TOP_ARTISTS_NAMES)
-        _dump(f'{self.path}top_artists_pop.pkl', TOP_ARTISTS_POPULARITY)
+        # Legacy pickle writes removed - JSON handles this now
+        # Filesystem JSON mirrors
+        self._atomic_json_write(os.path.join(self.path, 'top_artists.json'), TOP_ARTISTS_NAMES)
+        self._atomic_json_write(os.path.join(self.path, 'top_artists_pop.json'), TOP_ARTISTS_POPULARITY)
 
 
     # INT or "N/A" if single, STR separated by commas if multiple
     def _add_top_artists_rank(self):
-        UNIQUE_SONGS_DF = pd.read_pickle(f'{self.path}unique_songs_df.pkl')
-        TOP_ARTISTS = _load(f'{self.path}top_artists.pkl')
+        UNIQUE_SONGS_DF = pd.read_json(f'{self.path}unique_songs.ndjson.gz', lines=True, compression='gzip')
+        with open(f'{self.path}top_artists.json', 'r', encoding='utf-8') as f:
+            TOP_ARTISTS = json.load(f)
 
         for top_list, col_name in zip(TOP_ARTISTS, ['artists_short_rank', 'artists_med_rank', 'artists_long_rank']):
             new_list = []
@@ -251,7 +312,8 @@ class SetupData():
                     rank = 'N/A'
                 new_list.append(rank)
             UNIQUE_SONGS_DF[col_name] = new_list
-        UNIQUE_SONGS_DF.to_pickle(f"{self.path}unique_songs_df.pkl")
+        # Persist updated ranks to NDJSON (pickle not required for runtime)
+        self._atomic_gzip_ndjson_write(os.path.join(self.path, 'unique_songs.ndjson.gz'), UNIQUE_SONGS_DF)
 
 
     def _get_top_songs(self):
@@ -264,12 +326,14 @@ class SetupData():
             self.SPOTIFY.current_user_top_tracks(time_range='long_term', limit=50)['items'])}
         TOP_SONGS = [TOP_SONGS_SHORT, TOP_SONGS_MED, TOP_SONGS_LONG]
 
-        _dump(f'{self.path}top_songs.pkl', TOP_SONGS)
+        # Persist Top Songs as JSON (pickle not required)
+        self._atomic_json_write(os.path.join(self.path, 'top_songs.json'), TOP_SONGS)
 
 
     def _add_top_songs_rank(self):
-        UNIQUE_SONGS_DF = pd.read_pickle(f'{self.path}unique_songs_df.pkl')
-        TOP_SONGS = _load(f'{self.path}top_songs.pkl')
+        UNIQUE_SONGS_DF = pd.read_json(f'{self.path}unique_songs.ndjson.gz', lines=True, compression='gzip')
+        with open(f'{self.path}top_songs.json', 'r', encoding='utf-8') as f:
+            TOP_SONGS = json.load(f)
 
         for top_dict, col_name in zip(TOP_SONGS, ['songs_short_rank', 'songs_med_rank', 'songs_long_rank']):
             new_list = []
@@ -281,20 +345,26 @@ class SetupData():
                     rank = 'N/A'
                 new_list.append(rank)
             UNIQUE_SONGS_DF[col_name] = new_list
-        UNIQUE_SONGS_DF.to_pickle(f"{self.path}unique_songs_df.pkl")
+        # Persist updated ranks to NDJSON (pickle not required for runtime)
+        self._atomic_gzip_ndjson_write(os.path.join(self.path, 'unique_songs.ndjson.gz'), UNIQUE_SONGS_DF)
 
 
     def _add_genres(self):
         # Add 'genres' column to ALL_SONGS and UNIQUE_SONGS like ['pop', 'punk']
-        ALL_SONGS_DF = pd.read_pickle(f'{self.path}all_songs_df.pkl')
-        UNIQUE_SONGS_DF = pd.read_pickle(f'{self.path}unique_songs_df.pkl')
+        ALL_SONGS_DF = pd.read_json(f'{self.path}all_songs.ndjson.gz', lines=True, compression='gzip')
+        UNIQUE_SONGS_DF = pd.read_json(f'{self.path}unique_songs.ndjson.gz', lines=True, compression='gzip')
 
         # Get Genres for Each Song By Artist Genres - Takes 2 minutes for 1000 unique artists
         unique_artist_names, unique_artist_ids = set(), set()
         for i in zip(UNIQUE_SONGS_DF['artist'], UNIQUE_SONGS_DF['artist_ids']):
             unique_artist_names = unique_artist_names | set(i[0].split(', '))
             unique_artist_ids = unique_artist_ids | set(i[1].split(', '))
-        _dump(f'{self.path}unique_artist_names.pkl', unique_artist_names)
+        # Store unique artist names as JSON for search features
+        try:
+            with open(os.path.join(self.path, 'unique_artist_names.json'), 'w', encoding='utf-8') as f:
+                json.dump(sorted(list(unique_artist_names)), f)
+        except Exception:
+            pass
         # if '' in unique_artist_ids:
         #     unique_artist_ids.remove('')
 
@@ -337,8 +407,9 @@ class SetupData():
                 genres_list.append(song_genres)
             df['genres'] = genres_list
 
-        ALL_SONGS_DF.to_pickle(f"{self.path}all_songs_df.pkl")
-        UNIQUE_SONGS_DF.to_pickle(f"{self.path}unique_songs_df.pkl")
+        # Filesystem-friendly outputs for analytics
+        self._atomic_gzip_ndjson_write(os.path.join(self.path, 'all_songs.ndjson.gz'), ALL_SONGS_DF)
+        self._atomic_gzip_ndjson_write(os.path.join(self.path, 'unique_songs.ndjson.gz'), UNIQUE_SONGS_DF)
 
 
     # Group Data with Top Artists/Songs, Genres, and setup Pages
@@ -367,34 +438,37 @@ class SetupData():
             self._add_genres()
 
             yield f'data:Setting Up Home Page...7/{total}<br>\n\n\n'
-            UNIQUE_SONGS_DF = pd.read_pickle(f'{self.path}unique_songs_df.pkl')
+            UNIQUE_SONGS_DF = pd.read_json(f'{self.path}unique_songs.ndjson.gz', lines=True, compression='gzip')
             home_page = HomePage(self.path, ALL_SONGS_DF, UNIQUE_SONGS_DF)
-            _dump(f'{self.path}home_page.pkl', home_page)
+            # Page objects no longer persisted; views compute on demand
 
             yield f'data:Setting Up About Me Page...8/{total}<br>\n\n\n'
             artists = self.SPOTIFY.current_user_followed_artists()[
                 'artists']['items']
-            top_artists = _load(f'{self.path}top_artists.pkl')
-            top_songs = _load(f'{self.path}top_songs.pkl')
+            with open(f'{self.path}top_artists.json', 'r', encoding='utf-8') as f:
+                top_artists = json.load(f)
+            with open(f'{self.path}top_songs.json', 'r', encoding='utf-8') as f:
+                top_songs = json.load(f)
             about_page = AboutPage(
                 self.path, ALL_SONGS_DF, UNIQUE_SONGS_DF, artists)
-            _dump(f'{self.path}about_page.pkl', about_page)
+            # Not persisted
 
             # Takes a while
             yield f'data:Setting Up Top50 Page...9/{total}<br>\n\n\n'
-            top_artists_pop = _load(f'{self.path}top_artists_pop.pkl')
+            with open(f'{self.path}top_artists_pop.json', 'r', encoding='utf-8') as f:
+                top_artists_pop = json.load(f)
             top50_page = Top50Page(
                 self.path, UNIQUE_SONGS_DF, top_artists, top_artists_pop)
-            _dump(f'{self.path}top50_page.pkl', top50_page)
+            # Not persisted
 
             yield f'data:Setting Up My Playlists Page...10/{total}<br>\n\n\n'
             myplaylists_page = MyPlaylistsPage(
                 self.path, ALL_SONGS_DF, top_artists, top_songs)
-            _dump(f'{self.path}myplaylists_page.pkl', myplaylists_page)
+            # Not persisted
 
             yield f'data:Finalizing Data Collection...{total}/{total}\n\n'
             status = {'SETUP1': True, 'SETUP2': True, 'SETUP3': False}
-            _dump(f'{self.path}collection.pkl', status)
+            self._atomic_json_write(os.path.join(self.path, 'setup_status.json'), status)
 
             yield 'data:REDIRECT_URI=' + REDIRECT_URI + '\n\n'
         except Exception as e:

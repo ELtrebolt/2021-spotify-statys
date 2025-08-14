@@ -5,6 +5,7 @@ __pycache__/
 
 .data
 .flask_session
+.flask_cache
 .sp_caches
 .spotify_caches
 
