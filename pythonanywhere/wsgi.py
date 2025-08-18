@@ -17,7 +17,7 @@ sys.path.append('/home/spotifystatys/.local/lib/python3.10/site-packages')
 # Set environment variables
 os.environ['SPOTIPY_CLIENT_ID'] = 'fromSpotify'
 os.environ['SPOTIPY_CLIENT_SECRET'] = 'fromSpotify'
-os.environ['SPOTIPY_REDIRECT_URI'] = 'https://spotifystatys.pythonanywhere.com/'
+os.environ['SPOTIPY_REDIRECT_URI'] = 'https://spotifystatys.pythonanywhere.com/callback'
 os.environ['FLASK_SECRET_KEY'] = 'strongRandomString'
 os.environ['SESSION_COOKIE_SECURE'] = 'True'
 

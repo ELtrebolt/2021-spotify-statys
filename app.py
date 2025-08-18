@@ -20,7 +20,6 @@ import base64
 import hashlib
 import hmac
 from flask_caching import Cache
-from flask_session import Session
 from flask import Flask, request, redirect, render_template, Response, jsonify, make_response, g, session
 from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
@@ -40,11 +39,6 @@ progress_data = {}
 # Secret key for signing cookies (in production, use a secure random key)
 SECRET_KEY = 'your-secret-key-here-change-in-production'
 
-# Unpickle Python Objects
-def _load(path, name):
-    with open(path + name, 'rb') as f: 
-        return pickle.load(f)
-
 # Creating Flask App
 app = Flask(__name__, template_folder='templates')
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
@@ -57,18 +51,8 @@ for d in [session_folder, cache_fs_folder]:
     if not os.path.exists(d):
         os.makedirs(d)
 
-# Flask secret key (use env var in production)
+# Flask secret key (use env var in production) – keep for any flashes/CSRF, but disable Flask-Session
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', SECRET_KEY)
-
-# Server-side sessions (filesystem)
-app.config['SESSION_TYPE'] = 'filesystem'
-app.config['SESSION_FILE_DIR'] = session_folder
-app.config['SESSION_PERMANENT'] = False
-app.config['SESSION_USE_SIGNER'] = True
-app.config['SESSION_COOKIE_HTTPONLY'] = True
-app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
-app.config['SESSION_COOKIE_SECURE'] = os.getenv('SESSION_COOKIE_SECURE', 'False').lower() in ('1', 'true', 't', 'yes', 'y', 'on')
-Session(app)
 
 # File-system caching so it persists across reloads
 app.config['CACHE_TYPE'] = 'FileSystemCache'
@@ -77,20 +61,22 @@ app.config['CACHE_DIR'] = cache_fs_folder
 cache = Cache(app)
 cache.init_app(app)
 
-# Setting environment variables
-# Do not force-set env here; rely on existing process env
-# os.environ['SPOTIPY_CLIENT_ID'] = CLIENT_ID
-# os.environ['SPOTIPY_CLIENT_SECRET'] = CLIENT_SECRET
-
-# Removed legacy cache folders (.spotify_caches, .sp_caches) as unused
-
 # -------------------------------Authentication Helpers-----------------------------------------------
 
 def build_redirect_uri():
-    """Build redirect URI dynamically to match Spotify app settings exactly."""
-    # Use request.host_url (includes scheme + host + trailing slash)
-    base = request.host_url.rstrip('/')
-    return f"{base}/callback"
+    """Require explicit SPOTIPY_REDIRECT_URI for exact-match with Spotify settings.
+
+    Set SPOTIPY_REDIRECT_URI to your exact callback URL, e.g.,
+    https://<subdomain>.pythonanywhere.com/callback
+    """
+    load_dotenv(override=False)
+    redirect_uri = os.getenv('SPOTIPY_REDIRECT_URI', '').strip()
+    if not redirect_uri:
+        raise RuntimeError(
+            'Missing SPOTIPY_REDIRECT_URI. Set it to your exact callback, e.g., '
+            'https://spotifystatys.pythonanywhere.com/callback'
+        )
+    return redirect_uri
 
 def create_auth_manager():
     """Create a new SpotifyOAuth instance using current env vars."""
@@ -495,12 +481,12 @@ def home():
 	first_times = home_page.load_first_times()
 
 	return render_template('home.html', collection=False,
-						   name=user['display_name'], today=str(
-							   datetime.datetime.now().astimezone().date())[5:],
-						   on_this_date=on_this_date,
-						   full_timeline=full_timeline,
-						   last_added_playlist=last_added_playlist,
-						   overall_data=overall_data, first_times=first_times)
+					   name=user['display_name'], today=str(
+								   datetime.datetime.now().astimezone().date())[5:],
+					   on_this_date=on_this_date,
+					   full_timeline=full_timeline,
+					   last_added_playlist=last_added_playlist,
+					   overall_data=overall_data, first_times=first_times)
 
 # Sign out
 @app.route('/sign-out')
@@ -761,7 +747,7 @@ def search():
     collection_json = f'{user_path}setup_status.json'
     if not os.path.exists(setup_json) or not os.path.exists(collection_json):
         return redirect('/')
-
+    
     with open(setup_json, 'r', encoding='utf-8') as f:
         setup_data = json.load(f)
     playlist_dict = setup_data['playlist_dict']  # name -> id
@@ -819,8 +805,8 @@ def search():
             return 'Query not found - make sure you spelled correctly!'
 
         return redirect(url)
-
-    return render_template('search.html')
+    
+        return render_template('search.html')
 
 
 # Single / Multiple Playlists
@@ -830,7 +816,7 @@ def analyze_playlists(playlist_ids):
     user = get_current_user()
     if not user:
         return redirect('/')
-
+    
     user_path = f'.data/{user["id"]}/'
     setup_json = f'{user_path}setup_data.json'
     if not os.path.exists(setup_json):
@@ -859,11 +845,11 @@ def analyze_playlists(playlist_ids):
         similar_playlists = page.graph_similar_playlists()
 
         return render_template('analyze_playlist.html', playlist_name=playlist_name,
-                               timeline=timeline, genres=genres,
-                               top_artists=top_artists, top_albums=top_albums,
-                               features_boxplot=features_boxplot,
+                            timeline=timeline, genres=genres,
+                            top_artists=top_artists, top_albums=top_albums,
+                            features_boxplot=features_boxplot,
                                similar_playlists=similar_playlists)
-
+    
     elif len(ids) > 1:
         try:
             names = [id_to_name[i] for i in ids]
@@ -889,7 +875,7 @@ def analyze_artists(artist_names):
     user = get_current_user()
     if not user:
         return redirect('/')
-
+    
     user_path = f'.data/{user["id"]}/'
     all_songs_df = pd.read_json(f'{user_path}all_songs.ndjson.gz', lines=True, compression='gzip')
     unique_songs_df = pd.read_json(f'{user_path}unique_songs.ndjson.gz', lines=True, compression='gzip')
@@ -908,10 +894,10 @@ def analyze_artists(artist_names):
         playlists_genres = page.graph_playlists_by_artist_genres()
 
         return render_template('analyze_artist.html', artist_name=artist_name,
-                               timeline=timeline, top_rank_table=top_rank_table,
-                               top_playlists=top_playlists, top_songs=top_songs,
-                               features_boxplot=features_boxplot,
-                               artist_genres=artist_genres,
+                            timeline=timeline, top_rank_table=top_rank_table,
+                            top_playlists=top_playlists, top_songs=top_songs,
+                            features_boxplot=features_boxplot,
+                            artist_genres=artist_genres,
                                playlists_genres=playlists_genres)
 
     elif len(artists_list) > 1:
@@ -923,10 +909,10 @@ def analyze_artists(artist_names):
         audio_features = page.graph_artists_boxplots()
 
         return render_template('analyze_artists.html', artists_list=artists_list,
-                               artist_timelines=artist_timelines,
-                               genres=genres, top_ranks=top_ranks, top_playlists=top_playlists,
-                               audio_features=audio_features)
-
+                            artist_timelines=artist_timelines,
+                            genres=genres, top_ranks=top_ranks, top_playlists=top_playlists,
+                            audio_features=audio_features)
+    
 
 # Single / Multiple Songs
 @app.route('/songs/<path:song_ids>')
@@ -935,7 +921,7 @@ def analyze_songs(song_ids):
     user = get_current_user()
     if not user:
         return redirect('/')
-
+    
     user_path = f'.data/{user["id"]}/'
     all_songs_df = pd.read_json(f'{user_path}all_songs.ndjson.gz', lines=True, compression='gzip')
     unique_songs_df = pd.read_json(f'{user_path}unique_songs.ndjson.gz', lines=True, compression='gzip')
@@ -956,11 +942,11 @@ def analyze_songs(song_ids):
         artist_genres = page.graph_artist_genres()
         genres_overall_percentiles = page.graph_song_genres_vs_avg()
 
-        return render_template('single_song.html', song=song, artist=artist, artist_url=artist_url,
-                               top_rank_table=top_rank_table,
-                               song_features_radar=song_features_radar, song_features_percentiles_bar=song_features_percentiles_bar,
-                               playlist_date_gantt=playlist_date_gantt,
-                               artist_top_graphs=artist_top_graphs,
+        return render_template('single_song.html', song=song, artist=artist, artist_url=artist_url, 
+                                top_rank_table=top_rank_table,
+                                song_features_radar=song_features_radar, song_features_percentiles_bar=song_features_percentiles_bar,
+                                playlist_date_gantt=playlist_date_gantt,
+                                artist_top_graphs=artist_top_graphs,
                                artist_genres=artist_genres, genres_overall_percentiles=genres_overall_percentiles)
 
     elif len(ids) > 1:

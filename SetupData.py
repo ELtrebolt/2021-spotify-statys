@@ -8,12 +8,6 @@ import gzip
 from visualization import HomePage, AboutPage, Top50Page, MyPlaylistsPage
 import traceback
 
-# Test Local
-# REDIRECT_URI = 'http://127.0.0.1:5000/'
-# Run Heroku
-# REDIRECT_URI = 'https://spotifystatys.pythonanywhere.com/callback'
-# Run PythonAnywhere
-REDIRECT_URI = 'https://spotifystatys.pythonanywhere.com/callback'
 PERCENTILE_COLS = ['popularity', 'duration']
 # DEPRECATED 2025
 #FEATURE_COLS = ['id', 'danceability', 'energy', 'loudness', 'speechiness',
@@ -242,7 +236,6 @@ class SetupData():
             status = {'SETUP1': True, 'SETUP2': False, 'SETUP3': False}
             self._atomic_json_write(os.path.join(self.path, 'setup_status.json'), status)
 
-            yield 'data:REDIRECT_URI=' + REDIRECT_URI + '\n\n'
         except Exception as e:
             yield 'data:ERROR=' + traceback.format_exc().replace('\n', '<br>') + '\n\n'
 
@@ -470,6 +463,5 @@ class SetupData():
             status = {'SETUP1': True, 'SETUP2': True, 'SETUP3': False}
             self._atomic_json_write(os.path.join(self.path, 'setup_status.json'), status)
 
-            yield 'data:REDIRECT_URI=' + REDIRECT_URI + '\n\n'
         except Exception as e:
             yield 'data:ERROR=' + traceback.format_exc().replace('\n', '<br>') + '\n\n'
