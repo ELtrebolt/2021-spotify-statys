@@ -3,6 +3,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+.cursor
 .data
 .flask_session
 .flask_cache

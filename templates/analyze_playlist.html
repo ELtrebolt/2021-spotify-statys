@@ -46,7 +46,15 @@
         {{ features_boxplot }}
         <hr>
 
-        {{ similar_playlists }}
+        <h2>Most Similar Playlists</h2>
+        <div class="wrapper">
+            <div class="div div2">
+                {{ similar_playlists_current_in_others }}
+            </div>
+            <div class="div div2">
+                {{ similar_playlists_others_in_current }}
+            </div>
+        </div>
     </body>
 
 </html>

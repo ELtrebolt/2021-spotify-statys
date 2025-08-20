@@ -29,19 +29,19 @@
     <br>
 
     <h2>On This Date {{today}}:</h2>
-    {{ on_this_date }}
+    {{ on_this_date|safe }}
     <ul>
         {% for item in first_times %}
-            <li>{{item}}</li>
+            <li>{{item|safe}}</li>
         {% endfor %}
     </ul>        
 
-    {{ full_timeline }}
+    {{ full_timeline|safe }}
     <hr>
 
     <h2>My Most Recent Activity:</h2>
     <h3>{{ last_added_playlist[0] }} days ago, I added {{ last_added_playlist[2] }} songs to {{ last_added_playlist[3] }} playlists</h3>
-    {{ last_added_playlist[1] }}
+    {{ last_added_playlist[1]|safe }}
     <hr>
 
     <h2>My Library Totals:</h2>

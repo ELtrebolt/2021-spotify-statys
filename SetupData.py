@@ -185,6 +185,26 @@ class SetupData():
         os.replace(tmp, path)
 
 
+    # Get all of the user's liked/saved songs
+    def _get_liked_songs(self):
+        df = pd.DataFrame()
+        playlist_name = "Liked Songs"
+
+        try:
+            tracks = self.SPOTIFY.current_user_saved_tracks(limit=50, offset=0)
+        except:
+            return 'data:ERROR=' + traceback.format_exc().replace('\n', '<br>') + '\n\n'
+        
+        df = pd.concat([df, self._get_100_songs(tracks, playlist_name)])
+
+        offset = len(tracks['items'])
+        while tracks['next']:
+            tracks = self.SPOTIFY.current_user_saved_tracks(limit=50, offset=offset)
+            df = pd.concat([df, self._get_100_songs(tracks, playlist_name)])
+            offset += len(tracks['items'])
+
+        return df.reset_index()
+
     # Get all of a playlists songs
     def _get_playlist(self, name, _id):
         df = pd.DataFrame()
@@ -211,7 +231,7 @@ class SetupData():
     def setup_1(self):
         try:
             count = 1
-            total = len(self.PLAYLIST_DICT)
+            total = len(self.PLAYLIST_DICT) + 1  # +1 for liked songs
             yield 'data:<h1>Collecting Your Playlists</h1>\n\n'
 
             ALL_SONGS_DF = pd.DataFrame()
@@ -226,6 +246,16 @@ class SetupData():
                         yield 'data:***Total Song Count Reached Max Limit***<br/>\n\n\n'
                         break
                 count += 1
+
+            # Collect liked songs if we haven't hit the limit
+            if len(ALL_SONGS_DF) <= 8888:
+                yield 'data:Collecting Liked Songs...<br/>\n\n\n'
+                liked_df = self._get_liked_songs()
+                if type(liked_df) == str:
+                    yield liked_df
+                else:
+                    ALL_SONGS_DF = pd.concat([ALL_SONGS_DF, liked_df])
+                    yield 'data:Liked Songs --> ' + str(count) + '/' + str(total) + '<br/>\n\n\n'
 
             # Yung Yi had the problem of 'index' not found in axis
             if 'index' in ALL_SONGS_DF.columns:

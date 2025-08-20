@@ -87,7 +87,7 @@ def create_auth_manager():
     if not client_id or not client_secret:
         raise RuntimeError('Missing SPOTIPY_CLIENT_ID or SPOTIPY_CLIENT_SECRET. Set them in .env or environment.')
     return spotipy.oauth2.SpotifyOAuth(
-        scope='user-read-currently-playing playlist-read-private user-top-read user-follow-read',
+        scope='user-read-currently-playing playlist-read-private user-top-read user-follow-read user-library-read',
         client_id=client_id,
         client_secret=client_secret,
         redirect_uri=build_redirect_uri(),
@@ -183,7 +183,7 @@ def start_setup_1():
         'status': 'running',
         'messages': [],
         'current_step': 0,
-        'total_steps': len(playlist_dict),
+        'total_steps': len(playlist_dict) + 1,  # +1 for liked songs
         'complete': False,
         'error': None
     }
@@ -200,7 +200,7 @@ def start_setup_1():
                     break
                     
                 progress_data[progress_id]['current_step'] = i + 1
-                progress_data[progress_id]['messages'].append(f'{name} --> {i + 1}/{len(playlist_dict)}')
+                progress_data[progress_id]['messages'].append(f'{name} --> {i + 1}/{progress_data[progress_id]["total_steps"]}')
                 
                 try:
                     # Process playlist
@@ -222,6 +222,29 @@ def start_setup_1():
                 except Exception as playlist_error:
                     progress_data[progress_id]['messages'].append(f'Error processing {name}: {str(playlist_error)}')
                     continue
+            
+            # Collect liked songs if we haven't hit the limit and haven't been cancelled
+            if len(ALL_SONGS_DF) <= 8888 and progress_data[progress_id]['status'] != 'cancelled':
+                progress_data[progress_id]['current_step'] = len(playlist_dict) + 1
+                progress_data[progress_id]['messages'].append('Collecting Liked Songs...')
+                
+                try:
+                    liked_df = temp_setup._get_liked_songs()
+                    if isinstance(liked_df, str) and liked_df.startswith('data:ERROR='):
+                        progress_data[progress_id]['error'] = liked_df
+                        progress_data[progress_id]['status'] = 'error'
+                        return
+                    
+                    # Add liked songs to main dataframe
+                    if not liked_df.empty:
+                        ALL_SONGS_DF = pd.concat([ALL_SONGS_DF, liked_df])
+                        progress_data[progress_id]['messages'].append(f'Liked Songs --> {progress_data[progress_id]["current_step"]}/{progress_data[progress_id]["total_steps"]}')
+                    else:
+                        progress_data[progress_id]['messages'].append('No liked songs found')
+                        
+                except Exception as liked_error:
+                    progress_data[progress_id]['messages'].append(f'Error processing liked songs: {str(liked_error)}')
+                    # Don't return here - continue with what we have
             
             # Save the dataframe (NDJSON only)
             if not ALL_SONGS_DF.empty:
@@ -470,9 +493,14 @@ def home():
 	all_songs_df = pd.read_json(all_songs_path, lines=True, compression='gzip')
 	unique_songs_df = pd.read_json(unique_songs_path, lines=True, compression='gzip')
 
+	# Load setup data to get playlist_dict
+	with open(f'{user_path}setup_data.json', 'r', encoding='utf-8') as f:
+		setup_data = json.load(f)
+	playlist_dict = setup_data['playlist_dict']
+
 	# Build page artifacts in-memory (no pickles)
 	from visualization import HomePage
-	home_page = HomePage(user_path, all_songs_df, unique_songs_df)
+	home_page = HomePage(user_path, all_songs_df, unique_songs_df, playlist_dict)
 
 	on_this_date = home_page.load_on_this_date()
 	full_timeline = home_page.load_timeline()
@@ -756,6 +784,10 @@ def search():
     # Data needed for ID/artist checks
     all_songs_df_path = f'{user_path}all_songs.ndjson.gz'
     all_songs_df = pd.read_json(all_songs_df_path, lines=True, compression='gzip') if os.path.exists(all_songs_df_path) else pd.DataFrame()
+    
+    # Add "Liked Songs" as a special playlist if it exists in the data
+    if not all_songs_df.empty and 'Liked Songs' in all_songs_df['playlist'].values:
+        lowercase_playlists['liked songs'] = 'liked_songs'  # Use special ID for liked songs
     unique_artist_names_path = f'{user_path}unique_artist_names.json'
     lowercase_artists = {}
     if os.path.exists(unique_artist_names_path):
@@ -806,7 +838,7 @@ def search():
 
         return redirect(url)
     
-        return render_template('search.html')
+    return render_template('search.html')
 
 
 # Single / Multiple Playlists
@@ -825,6 +857,9 @@ def analyze_playlists(playlist_ids):
         setup_data = json.load(f)
     playlist_dict = setup_data['playlist_dict']  # name -> id
     id_to_name = {pid: name for name, pid in playlist_dict.items()}
+    
+    # Add special handling for "Liked Songs"
+    id_to_name['liked_songs'] = 'Liked Songs'
 
     all_songs_df = pd.read_json(f'{user_path}all_songs.ndjson.gz', lines=True, compression='gzip')
     unique_songs_df = pd.read_json(f'{user_path}unique_songs.ndjson.gz', lines=True, compression='gzip')
@@ -835,20 +870,28 @@ def analyze_playlists(playlist_ids):
         if pid not in id_to_name:
             return 'Playlist ID Not Found'
         playlist_name = id_to_name[pid]
-        page = AnalyzePlaylistPage(playlist_name, all_songs_df, unique_songs_df)
+        
+        # Get global playlist averages from home page for consistency
+        from visualization import HomePage
+        home_page = HomePage(user_path, all_songs_df, unique_songs_df, {})
+        global_playlist_averages = home_page.get_global_playlist_averages()
+        
+        page = AnalyzePlaylistPage(playlist_name, all_songs_df, unique_songs_df, global_playlist_averages)
 
         timeline = page.graph_count_timeline()
         genres = page.graph_playlist_genres()
         top_artists = page.graph_top_artists()
         top_albums = page.graph_top_albums()
         features_boxplot = page.graph_song_features_boxplot()
-        similar_playlists = page.graph_similar_playlists()
+        similar_playlists_current_in_others = page.graph_similar_playlists_by_current_in_others()
+        similar_playlists_others_in_current = page.graph_similar_playlists_by_others_in_current()
 
         return render_template('analyze_playlist.html', playlist_name=playlist_name,
                             timeline=timeline, genres=genres,
                             top_artists=top_artists, top_albums=top_albums,
                             features_boxplot=features_boxplot,
-                               similar_playlists=similar_playlists)
+                            similar_playlists_current_in_others=similar_playlists_current_in_others,
+                            similar_playlists_others_in_current=similar_playlists_others_in_current)
     
     elif len(ids) > 1:
         try:
@@ -880,10 +923,15 @@ def analyze_artists(artist_names):
     all_songs_df = pd.read_json(f'{user_path}all_songs.ndjson.gz', lines=True, compression='gzip')
     unique_songs_df = pd.read_json(f'{user_path}unique_songs.ndjson.gz', lines=True, compression='gzip')
 
+    # Get global artist averages from home page for consistency
+    from visualization import HomePage
+    home_page = HomePage(user_path, all_songs_df, unique_songs_df, {})
+    global_artist_averages = home_page.get_global_artist_averages()
+
     artists_list = [i for i in artist_names.split('/')]
     if len(artists_list) == 1:
         artist_name = artists_list[0]
-        page = AnalyzeArtistPage(artist_name, all_songs_df, unique_songs_df)
+        page = AnalyzeArtistPage(artist_name, all_songs_df, unique_songs_df, global_artist_averages)
 
         timeline = page.graph_count_timeline()
         top_rank_table = page.graph_top_rank_table()
@@ -901,7 +949,7 @@ def analyze_artists(artist_names):
                                playlists_genres=playlists_genres)
 
     elif len(artists_list) > 1:
-        page = AnalyzeArtistsPage(artists_list, all_songs_df, unique_songs_df)
+        page = AnalyzeArtistsPage(artists_list, all_songs_df, unique_songs_df, global_artist_averages)
         artist_timelines = page.graph_artist_timelines()
         genres = page.graph_artist_genres()
         top_ranks = page.graph_top_rank_table()
