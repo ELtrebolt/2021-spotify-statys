@@ -14,7 +14,7 @@
 
 <body>
 
-    <h1>Hi {{name}}!   <small><a href="/sign-out">[sign out]</a></small></h1>
+    <h1>Hi {{name}}!   <small><a href="/logout">[sign out]</a></small></h1>
     <br>
 
     <a href="/about-me">about me</a> |
@@ -45,7 +45,7 @@
     <hr>
 
     <h2>My Library Totals:</h2>
-    <h3>Across {{ overall_data[2] }} playlists, I've added {{ overall_data[0] }} songs</h3>
+    <h3>Across {{ overall_data[2] - 1 }} playlists, I've added {{ overall_data[0] - overall_data[5] }} songs and liked {{ overall_data[5] }} songs</h3>
     <h3>My playlists have {{ overall_data[1] }} unique songs, {{ overall_data[4] }} unique albums, and {{ overall_data[3] }} unique artists</h3>
 
 </body>

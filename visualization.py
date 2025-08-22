@@ -771,26 +771,48 @@ def shared_graph_top_songs_by_artist(UNIQUE_SONGS_DF, artist_name):
     d = {k: ', '.join(v) for k, v in sorted(
         d.items(), key=lambda x: x[0], reverse=True)}
 
+    # Limit the number of rows to prevent super long tables
+    max_rows = 20  # Show maximum 20 rows to keep table manageable
+    if len(d) > max_rows:
+        # Keep only top rows and add note about truncation
+        d_truncated = dict(list(d.items())[:max_rows])
+        d_truncated[f"... and {len(d) - max_rows} more"] = [f"({len(d) - max_rows} additional songs with fewer playlists)"]
+        d = d_truncated
+
+    # Calculate responsive height - cap at reasonable maximum
+    base_height = 200  # Base height for header and minimum content
+    row_height = 35    # Height per row
+    max_height = 600   # Maximum height to prevent super long tables
+    calculated_height = base_height + (len(d) * row_height)
+    table_height = min(calculated_height, max_height)
+
     fig = go.Figure(data=[go.Table(
         header=dict(
             values=['# Playlists Song Is In', 'Artist Song(s)'],
             line_color='darkslategray',
             fill_color='royalblue',
-            font=dict(color='white', size=18),
+            font=dict(color='white', size=16),
             height=40
         ),
         cells=dict(
             values=[list(d.keys()), list(d.values())],
             line_color='darkslategray',
             align='center',
-            font_size=[18, 14],
-            height=30)
-    )
-    ])
+            font_size=[14, 12],
+            height=row_height
+        ),
+        columnwidth=[0.3, 0.7]  # 30% for playlist count, 70% for song names
+    )])
 
-    fig.update_layout(autosize=True, title_text='Most Common Songs For Artist: ' + artist_name,
-                      xaxis_title="Number of Playlists The Artist's Song Is In",
-                      height=min(max((len(df)+1)*25, 300), 500))
+    # Update layout with responsive sizing
+    fig.update_layout(
+        autosize=True, 
+        title_text='Most Common Songs For Artist: ' + artist_name,
+        xaxis_title="Number of Playlists The Artist's Song Is In",
+        height=table_height,
+        # Make table responsive
+        margin=dict(l=20, r=20, t=80, b=20)
+    )
 
     return Markup(fig.to_html(full_html=False))
 
@@ -926,7 +948,14 @@ class CurrentlyPlayingPage():
 
         data = []
         for name, df in zip(names, dfs):
-            data.append(go.Bar(name=name, x=FEATURE_COLS, y=[df.iloc[0]], text=[df.iloc[0]], textposition='auto'))
+            # Round the values for display in text
+            if len(FEATURE_COLS) == 1:
+                # Single column case - df.iloc[0] is a single value
+                rounded_values = [round(df.iloc[0], 2)]
+            else:
+                # Multiple columns case - df.iloc[0] is a list
+                rounded_values = [round(val, 2) for val in df.iloc[0]]
+            data.append(go.Bar(name=name, x=FEATURE_COLS, y=[df.iloc[0]], text=rounded_values, textposition='auto'))
         fig = go.Figure(data=data)
         fig.update_layout(barmode='group', title_text=title)
         return Markup(fig.to_html(full_html=False))
@@ -1015,8 +1044,89 @@ class CurrentlyPlayingPage():
 
     def graph_count_timeline(self):
         if not self._playlist:
-            return None 
-        return shared_graph_count_timeline(self._all_songs_df, playlists=[self._playlist], song_name=self._song, artists=[self._artist])
+            return None
+        
+        # Filter data for the current playlist
+        playlist_df = self._all_songs_df[self._all_songs_df['playlist'] == self._playlist]
+        
+        if len(playlist_df.index) == 0:
+            return None
+        
+        # Group by date and count songs, create hovertext
+        timeline_data = playlist_df.groupby('date_added').agg({
+            'name': lambda x: list(x),
+            'artist': lambda x: list(x)
+        }).reset_index()
+        
+        # Create hovertext with song names separated by <br>
+        hovertext = []
+        for _, row in timeline_data.iterrows():
+            song_names = [f"{name} by {artist}" for name, artist in zip(row['name'], row['artist'])]
+            hovertext.append('<br>'.join(song_names))
+        
+        # Create the line graph
+        fig = go.Figure()
+        
+        # Add main timeline trace
+        fig.add_trace(go.Scatter(
+            x=timeline_data['date_added'],
+            y=timeline_data['name'].apply(len),
+            mode='lines+markers',
+            name=f'Songs Added to {self._playlist}',
+            line=dict(color=MAIN_TIMELINE_COLOR),
+            marker=dict(size=8),
+            hovertext=hovertext,
+            hovertemplate='<b>%{hovertext}</b><br>' +
+                         'Date: %{x}<br>' +
+                         'Songs Added: %{y}<extra></extra>'
+        ))
+        
+        # Find the date when the current song was added to the current playlist
+        current_song_df = playlist_df[
+            (playlist_df['name'] == self._song) & 
+            (playlist_df['artist'] == self._artist)
+        ]
+        
+        if len(current_song_df.index) > 0:
+            current_song_date = current_song_df.iloc[0]['date_added']
+            
+            # Convert string date to datetime object for proper vline positioning
+            if isinstance(current_song_date, str):
+                current_song_date = datetime.datetime.fromisoformat(current_song_date.replace('Z', '+00:00'))
+            
+            # Add vertical line at the date the current song was added
+            fig.add_vline(
+                x=current_song_date,
+                line_dash="dash",
+                line_color=YEARLY_VLINE_COLOR,
+                line_width=2
+            )
+        
+        # Update layout
+        fig.update_layout(
+            title_text=f"Timeline of Songs Added to {self._playlist}",
+            xaxis_title="Date",
+            yaxis_title="Number of Songs Added",
+            height=500,
+            showlegend=False
+        )
+        
+        # Update x-axis to show dates properly
+        fig.update_xaxes(
+            # don't need this
+            # rangeslider_visible=True,
+            rangeselector=dict(
+                buttons=list([
+                    dict(count=1, label="1m", step="month", stepmode="backward"),
+                    dict(count=6, label="6m", step="month", stepmode="backward"),
+                    dict(count=1, label="YTD", step="year", stepmode="todate"),
+                    dict(count=1, label="1y", step="year", stepmode="backward"),
+                    dict(step="all")
+                ])
+            )
+        )
+        
+        return Markup(fig.to_html(full_html=False))
 
     def graph_top_playlists_by_artist(self, artist_name):
         return shared_graph_top_playlists_by_artist(self._all_songs_df, artist_name)
@@ -1034,34 +1144,189 @@ class CurrentlyPlayingPage():
 
     # What percentage of songs in a playlist or among all playlists have these genres?
     def graph_song_genres_vs_avg(self, playlist=False):
-        if self._song_genres is None:
-            return None
+        """Graph percentage of songs with same genres as current artist"""
         UNIQUE_SONGS_DF = self._unique_songs_df
         ALL_SONGS_DF = self._all_songs_df
         # Require genres column to compute percentages
         if 'genres' not in UNIQUE_SONGS_DF.columns or 'genres' not in ALL_SONGS_DF.columns:
             return None
+        
         if playlist:
-            mask = UNIQUE_SONGS_DF['playlist'].apply(lambda x: self._playlist in x)
-            avg_df = UNIQUE_SONGS_DF[mask]
+            # New functionality: Percentage of Songs with Same Genres as Artist in Current Playlist
+            if not self._playlist:
+                return None
+            
+            # Get all songs in the current playlist
+            playlist_mask = ALL_SONGS_DF['playlist'] == self._playlist
+            playlist_df = ALL_SONGS_DF[playlist_mask]
+            
+            if len(playlist_df.index) == 0:
+                return None
+            
             title = 'Percentage of Songs With Same Genres As ' + self._artist + ' in ' + self._playlist
-            xaxis = '% of Songs in ' + self._playlist
+            xaxis = '% of Songs with Genres'
+
+            percents = []
+            song_counts = []
+            length = len(playlist_df.index) if len(playlist_df.index) > 0 else 1
+            for g in self._song_genres:
+                try:
+                    mask = playlist_df['genres'].apply(lambda x: g in {z for y in x for z in y})
+                    count = len(playlist_df[mask].index)
+                    percents.append(count/length*100)
+                    song_counts.append(count)
+                except Exception:
+                    percents.append(0.0)
+                    song_counts.append(0)
+
+            # Create hovertext with song counts
+            hovertext = [f"{count} songs ({percent:.1f}%)" for count, percent in zip(song_counts, percents)]
+            
+            series = pd.Series(dict(zip(self._song_genres, percents)))
+            return _h_bar(series, title=title, xaxis=xaxis, percents=True, fixHeight=True, hovertext=hovertext)
         else:
+            # Original functionality for overall playlists
             avg_df = ALL_SONGS_DF
             title = 'Percentage of Songs With Same Genres As ' + self._artist + ' Across All Playlists'
             xaxis = '% of Songs with Genres'
 
-        percents = []
-        length = len(avg_df.index) if len(avg_df.index) > 0 else 1
-        for g in self._song_genres:
-            try:
-                mask = avg_df['genres'].apply(lambda x: g in {z for y in x for z in y})
-                percents.append(len(avg_df[mask].index)/length*100)
-            except Exception:
-                percents.append(0.0)
+            percents = []
+            length = len(avg_df.index) if len(avg_df.index) > 0 else 1
+            for g in self._song_genres:
+                try:
+                    mask = avg_df['genres'].apply(lambda x: g in {z for y in x for z in y})
+                    percents.append(len(avg_df[mask].index)/length*100)
+                except Exception:
+                    percents.append(0.0)
 
-        series = pd.Series(dict(zip(self._song_genres, percents)))
-        return _h_bar(series, title=title, xaxis=xaxis, percents=True, fixHeight=True)
+            series = pd.Series(dict(zip(self._song_genres, percents)))
+            return _h_bar(series, title=title, xaxis=xaxis, percents=True, fixHeight=True)
+
+    def graph_most_common_artists_with_same_genres(self):
+        """Graph most common artists in playlist with same genres as current artist"""
+        ALL_SONGS_DF = self._all_songs_df
+        # Require genres column to compute percentages
+        if 'genres' not in ALL_SONGS_DF.columns:
+            return None
+        
+        if not self._playlist:
+            return None
+        
+        # Get all songs in the current playlist
+        playlist_mask = ALL_SONGS_DF['playlist'] == self._playlist
+        playlist_df = ALL_SONGS_DF[playlist_mask]
+        
+        if len(playlist_df.index) == 0:
+            return None
+        
+        # Find artists in the playlist that share genres with the current artist
+        shared_genre_artists = {}
+        
+        # Check if current artist has genres other than "N/A"
+        current_has_non_na_genres = any(genre != "N/A" for genre in self._song_genres)
+        
+        for _, row in playlist_df.iterrows():
+            # Split the artist field on commas to handle multiple artists per song
+            song_artists = [artist.strip() for artist in row['artist'].split(',')]
+            
+            # Check if this artist has any shared genres
+            try:
+                artist_genres = row['genres']
+                if artist_genres and isinstance(artist_genres, list):
+                    # Flatten the nested genre structure
+                    flat_artist_genres = {genre for genre_list in artist_genres for genre in genre_list}
+                    
+                    # Check for shared genres
+                    shared_genres = set(self._song_genres) & flat_artist_genres
+                    
+                    if shared_genres:
+                        # Process each artist in the song separately
+                        for artist_name in song_artists:
+                            # Skip the current artist
+                            if artist_name == self._artist:
+                                continue
+                            
+                            # If current artist has non-N/A genres, exclude artists that only share "N/A"
+                            if current_has_non_na_genres and shared_genres == {"N/A"}:
+                                continue
+                            
+                            # This artist shares genres with the current artist
+                            if artist_name not in shared_genre_artists:
+                                shared_genre_artists[artist_name] = {
+                                    'count': 0,
+                                    'songs': [],
+                                    'shared_genres': list(shared_genres)
+                                }
+                            
+                            shared_genre_artists[artist_name]['count'] += 1
+                            shared_genre_artists[artist_name]['songs'].append(row['name'])
+            except Exception:
+                continue
+        
+        if not shared_genre_artists:
+            # No artists with shared genres found
+            fig = go.Figure()
+            fig.update_layout(
+                title_text=f'Most Common Artists in {self._playlist} with Same Genres as {self._artist}',
+                xaxis_title='Number of Songs',
+                yaxis_title='Artist',
+                annotations=[{
+                    'text': f'No artists in {self._playlist} share genres with {self._artist}',
+                    'xref': 'paper',
+                    'yref': 'paper',
+                    'x': 0.5,
+                    'y': 0.5,
+                    'showarrow': False,
+                    'font': {'size': 16}
+                }],
+                height=300
+            )
+            return Markup(fig.to_html(full_html=False))
+        
+        # Create data for the horizontal bar chart
+        artists = []
+        counts = []
+        hovertexts = []
+        
+        # Sort by count (descending) and take top 10 artists
+        sorted_artists = sorted(shared_genre_artists.items(), key=lambda x: x[1]['count'], reverse=True)[:10]
+        
+        for artist_name, data in sorted_artists:
+            artists.append(artist_name)
+            counts.append(data['count'])
+            
+            # Create hovertext with shared genres first, then songs below
+            shared_genres_text = ', '.join(data['shared_genres'])
+            # Cap the songs to MAX_HOVER_ROWS for hovertext
+            songs_text = '<br>'.join(data['songs'][:MAX_HOVER_ROWS])
+            hovertext = f"<b>Shared Genres:</b> {shared_genres_text}<br><br><b>Songs:</b><br>{songs_text}"
+            hovertexts.append(hovertext)
+        
+        # Create the horizontal bar chart
+        fig = go.Figure(data=[go.Bar(
+            x=counts,
+            y=artists,
+            orientation='h',
+            text=counts,
+            textposition='auto',
+            hovertext=hovertexts,
+            hovertemplate='<b>%{hovertext}</b><extra></extra>',
+            marker_color=COLORS[0]  # Use first color from COLORS
+        )])
+        
+        # Update layout
+        fig.update_layout(
+            title_text=f'Most Common Artists in {self._playlist} with Same Genres as {self._artist}',
+            xaxis_title='Number of Songs',
+            yaxis_title='Artist',
+            yaxis={'categoryorder': 'total ascending'},
+            height=min(max((len(artists)+1)*40, 300), 600),  # Responsive height
+            margin=dict(l=20, r=20, t=80, b=20)
+        )
+        
+        fig.update_yaxes(automargin=True)
+        
+        return Markup(fig.to_html(full_html=False))
 
     def graph_all_artists(self):
         artist_top_graphs = []
@@ -1183,7 +1448,7 @@ class HomePage():
         # Always return a list so templates that iterate do not split characters
         if hasattr(self, '_first_times') and isinstance(self._first_times, list) and len(self._first_times) > 0:
             return self._first_times
-        return ['No recorded data of adding songs to a playlist on this date']
+        return ['No notable anniversaries found']
 
     def _graph_on_this_date(self):
         '''Output1 = Table = Year | Playlist | Songs Added
@@ -1197,7 +1462,7 @@ class HomePage():
         df = df[['name', 'artist', 'playlist', 'year']]
 
         if len(df.index) == 0:
-            first_times.append('No recorded data of adding songs to a playlist on this date')
+            first_times.append('No notable anniversaries found')
         else:
             for a in {j for i in df['artist'] for j in i.split(', ')}:
                 artist_df = ALL_SONGS_DF[ALL_SONGS_DF['artist'].apply(
@@ -1556,11 +1821,15 @@ class HomePage():
     def _get_library_totals(self):
         ALL_SONGS_DF = self._all_songs_df
         UNIQUE_SONGS_DF = self._unique_songs_df
+        
+        # Get liked songs count
+        liked_songs_df = ALL_SONGS_DF[ALL_SONGS_DF['playlist'] == 'Liked Songs']
+        liked_songs_count = len(liked_songs_df.index)
 
         overall_data = [len(ALL_SONGS_DF.index), len(UNIQUE_SONGS_DF),
                         len(ALL_SONGS_DF['playlist'].unique()), len(
                             UNIQUE_SONGS_DF['artist'].unique()),
-                        len(UNIQUE_SONGS_DF['album'].unique())]
+                        len(UNIQUE_SONGS_DF['album'].unique()), liked_songs_count]
 
         return overall_data
 
@@ -1708,10 +1977,11 @@ class AboutPage():
 # Analyze Multiple Playlists Page ----------------------------------------------------------------------------------------------
 
 class AnalyzePlaylistsPage():
-    def __init__(self, playlists, all_songs_df, unique_songs_df):
+    def __init__(self, playlists, all_songs_df, unique_songs_df, global_playlist_averages=None):
         self._playlists = playlists
         self._all_songs_df = pd.DataFrame(all_songs_df)
         self._unique_songs_df = pd.DataFrame(unique_songs_df)
+        self._global_playlist_averages = global_playlist_averages
 
     def _get_intersection_of_playlists(self, color):
         mask = self._unique_songs_df['playlist'].apply(
@@ -1734,9 +2004,322 @@ class AnalyzePlaylistsPage():
             return [_boxplot(x_data, y_data, text, title, xaxis, yaxis, to_html=False, name='Intersection', color=color), len(df.index)]
 
     def graph_playlist_timelines(self):
-        return shared_graph_count_timelines(
-            self._all_songs_df, title='Timeline of When Songs Were Added to Playlists',
-            playlists=self._playlists)
+        """Create timeline graphs showing when songs were added to playlists vs when they were added to Liked Songs"""
+        if not self._playlists or len(self._playlists) == 0:
+            return None
+        
+        # Get global playlist averages
+        global_avg_liked_songs_per_playlist = 0
+        global_avg_total_songs_per_playlist = 0
+        if self._global_playlist_averages:
+            global_avg_liked_songs_per_playlist, global_avg_total_songs_per_playlist = self._global_playlist_averages
+        
+        # Create the figure
+        fig = go.Figure()
+        
+        # Track all traces for visibility management
+        all_traces = []
+        
+        # Add traces for each playlist
+        for i, playlist in enumerate(self._playlists):
+            color = COLORS[i % len(COLORS)]
+            
+            # Filter data for this playlist (excluding Liked Songs playlist)
+            playlist_df = self._all_songs_df[self._all_songs_df['playlist'] == playlist]
+            
+            if len(playlist_df.index) > 0:
+                # Group by date and count songs, create hovertext for added songs
+                timeline_data = playlist_df.groupby('date_added').agg({
+                    'name': lambda x: list(x),
+                    'artist': lambda x: list(x)
+                }).reset_index()
+                
+                # Create hovertext with song names separated by <br>
+                hovertext = []
+                for _, row in timeline_data.iterrows():
+                    song_names = [f"{name} by {artist}" for name, artist in zip(row['name'], row['artist'])]
+                    hovertext.append('<br>'.join(song_names))
+                
+                # Add Added Songs Line trace (visible by default)
+                line_trace = go.Scatter(
+                    x=timeline_data['date_added'],
+                    y=timeline_data['name'].apply(len),
+                    mode='lines+markers',
+                    name=playlist,
+                    line=dict(color=color),
+                    marker=dict(size=6),
+                    hovertext=hovertext,
+                    hovertemplate='<b>%{hovertext}</b><br>' +
+                                'Date: %{x}<br>' +
+                                'Songs Added: %{y}<extra></extra>',
+                    visible=True
+                )
+                fig.add_trace(line_trace)
+                all_traces.append(line_trace)
+                
+                # Add Added Songs Continuous trace (cumulative)
+                continuous_trace = go.Scatter(
+                    x=timeline_data['date_added'],
+                    y=timeline_data['name'].apply(len).cumsum(),
+                    mode='lines+markers',
+                    name=f"{playlist}",
+                    line=dict(color=color, dash='dash'),
+                    marker=dict(size=6),
+                    hovertext=hovertext,
+                    hovertemplate='<b>%{hovertext}</b><br>' +
+                                'Date: %{x}<br>' +
+                                'Cumulative Songs Added: %{y}<extra></extra>',
+                    visible=False
+                )
+                fig.add_trace(continuous_trace)
+                all_traces.append(continuous_trace)
+                
+                # Add Added Songs Bar trace
+                bar_trace = go.Bar(
+                    x=timeline_data['date_added'],
+                    y=timeline_data['name'].apply(len),
+                    name=f"{playlist}",
+                    marker_color=color,
+                    hovertext=hovertext,
+                    hovertemplate='<b>%{hovertext}</b><br>' +
+                                'Date: %{x}<br>' +
+                                'Songs Added: %{y}<extra></extra>',
+                    visible=False
+                )
+                fig.add_trace(bar_trace)
+                all_traces.append(bar_trace)
+                
+                # Add Liked Songs traces for this playlist
+                # Find songs that exist in both the playlist and Liked Songs
+                liked_songs_df = self._all_songs_df[self._all_songs_df['playlist'] == 'Liked Songs']
+                if len(liked_songs_df.index) > 0:
+                    # Merge on name and artist to find matches
+                    playlist_liked_songs = pd.merge(playlist_df[['name', 'artist']], 
+                                                   liked_songs_df[['name', 'artist', 'date_added']], 
+                                                   on=['name', 'artist'])
+                    
+                    if len(playlist_liked_songs.index) > 0:
+                        # Group by date when songs were added to Liked Songs (not when added to playlist)
+                        liked_timeline_data = playlist_liked_songs.groupby('date_added').agg({
+                            'name': lambda x: list(x),
+                            'artist': lambda x: list(x)
+                        }).reset_index()
+                        
+                        # Create hovertext with song names separated by <br>
+                        liked_hovertext = []
+                        for _, row in liked_timeline_data.iterrows():
+                            song_names = [f"{name} by {artist}" for name, artist in zip(row['name'], row['artist'])]
+                            liked_hovertext.append('<br>'.join(song_names))
+                        
+                        # Add Liked Songs Line trace (not visible by default)
+                        liked_line_trace = go.Scatter(
+                            x=liked_timeline_data['date_added'],
+                            y=liked_timeline_data['name'].apply(len),
+                            mode='lines+markers',
+                            name=f"{playlist} Liked Songs",
+                            line=dict(color=color),
+                            marker=dict(size=6, symbol='diamond'),
+                            hovertext=liked_hovertext,
+                            hovertemplate='<b>%{hovertext}</b><br>' +
+                                        'Date: %{x}<br>' +
+                                        'Liked Songs Added: %{y}<extra></extra>',
+                            visible=False
+                        )
+                        fig.add_trace(liked_line_trace)
+                        all_traces.append(liked_line_trace)
+                        
+                        # Add Liked Songs Continuous trace (cumulative)
+                        liked_continuous_trace = go.Scatter(
+                            x=liked_timeline_data['date_added'],
+                            y=liked_timeline_data['name'].apply(len).cumsum(),
+                            mode='lines+markers',
+                            name=f"{playlist} Liked Songs",
+                            line=dict(color=color, dash='dash'),
+                            marker=dict(size=6, symbol='diamond'),
+                            hovertext=liked_hovertext,
+                            hovertemplate='<b>%{hovertext}</b><br>' +
+                                        'Date: %{x}<br>' +
+                                        'Cumulative Liked Songs: %{y}<extra></extra>',
+                            visible=False
+                        )
+                        fig.add_trace(liked_continuous_trace)
+                        all_traces.append(liked_continuous_trace)
+                        
+                        # Add Liked Songs Bar trace
+                        liked_bar_trace = go.Bar(
+                            x=liked_timeline_data['date_added'],
+                            y=liked_timeline_data['name'].apply(len),
+                            name=f"{playlist} Liked Songs",
+                            marker_color=color,
+                            hovertext=liked_hovertext,
+                            hovertemplate='<b>%{hovertext}</b><br>' +
+                                        'Date: %{x}<br>' +
+                                        'Liked Songs Added: %{y}<extra></extra>',
+                            visible=False
+                        )
+                        fig.add_trace(liked_bar_trace)
+                        all_traces.append(liked_bar_trace)
+                    else:
+                        # No liked songs for this playlist, add empty traces to maintain structure
+                        for _ in range(3):  # Line, Continuous, Bar
+                            empty_trace = go.Scatter(
+                                x=[], y=[],
+                                mode='lines+markers',
+                                name=f"{playlist} Liked Songs",
+                                line=dict(color=color),
+                                visible=False
+                            )
+                            fig.add_trace(empty_trace)
+                            all_traces.append(empty_trace)
+                else:
+                    # No liked songs playlist, add empty traces to maintain structure
+                    for _ in range(3):  # Line, Continuous, Bar
+                        empty_trace = go.Scatter(
+                            x=[], y=[],
+                            mode='lines+markers',
+                            name=f"{playlist} Liked Songs",
+                            line=dict(color=color),
+                            visible=False
+                        )
+                        fig.add_trace(empty_trace)
+                        all_traces.append(empty_trace)
+        
+        # Add horizontal average lines as traces (only visible when Continuous button is selected)
+        if global_avg_total_songs_per_playlist > 0:
+            # Get x range from the data
+            if len(fig.data) > 0 and len(fig.data[0].x) > 0:
+                x_min = min([trace.x[0] for trace in fig.data if len(trace.x) > 0])
+                x_max = max([trace.x[-1] for trace in fig.data if len(trace.x) > 0])
+            else:
+                x_min = '2020-01-01'
+                x_max = '2024-12-31'
+            
+            # Create a trace for the main average line
+            avg_total_line = go.Scatter(
+                x=[x_min, x_max],
+                y=[global_avg_total_songs_per_playlist, global_avg_total_songs_per_playlist],
+                mode='lines',
+                name=f"Your Avg # of Songs Added per Playlist = {global_avg_total_songs_per_playlist:.2f}",
+                line=dict(color=MAIN_AVG_COLOR, dash='dash', width=2),
+                visible=False
+            )
+            fig.add_trace(avg_total_line)
+            all_traces.append(avg_total_line)
+
+        if global_avg_liked_songs_per_playlist > 0:
+            # Get x range from the data
+            if len(fig.data) > 0 and len(fig.data[0].x) > 0:
+                x_min = min([trace.x[0] for trace in fig.data if len(trace.x) > 0])
+                x_max = max([trace.x[-1] for trace in fig.data if len(trace.x) > 0])
+            else:
+                x_min = '2020-01-01'
+                x_max = '2024-12-31'
+            
+            # Create a trace for the liked songs average line
+            avg_liked_line = go.Scatter(
+                x=[x_min, x_max],
+                y=[global_avg_liked_songs_per_playlist, global_avg_liked_songs_per_playlist],
+                mode='lines',
+                name=f"Your Avg # of Liked Songs per Playlist = {global_avg_liked_songs_per_playlist:.2f}",
+                line=dict(color=LIKED_AVG_COLOR, dash='dash', width=2),
+                visible=False
+            )
+            fig.add_trace(avg_liked_line)
+            all_traces.append(avg_liked_line)
+
+        # Create buttons for Line, Continuous, Bar views
+        buttons = []
+        
+        # Create visibility arrays based on actual figure data
+        # Count how many average lines we have
+        num_avg_lines = 0
+        if global_avg_total_songs_per_playlist > 0:
+            num_avg_lines += 1
+        if global_avg_liked_songs_per_playlist > 0:
+            num_avg_lines += 1
+        
+        # Calculate total playlist traces (excluding average lines)
+        total_playlist_traces = len(fig.data) - num_avg_lines
+        
+        # Line button (shows only playlist line traces)
+        line_visibility = []
+        for i in range(total_playlist_traces):
+            if i % 6 == 0:  # First trace for each playlist (Line)
+                line_visibility.append(True)
+            else:
+                line_visibility.append(False)
+        # Add average lines visibility (False for Line view)
+        for _ in range(num_avg_lines):
+            line_visibility.append(False)
+        buttons.append(dict(
+            method='update',
+            label='Line',
+            args=[{'visible': line_visibility}]
+        ))
+
+        # Continuous button (shows continuous traces and horizontal lines)
+        continuous_visibility = []
+        for i in range(total_playlist_traces):
+            if i % 6 == 1 or i % 6 == 4:  # Continuous traces (index 1 and 4 for each playlist)
+                continuous_visibility.append(True)
+            else:
+                continuous_visibility.append(False)
+        # Add horizontal lines visibility for continuous (True for average lines)
+        for _ in range(num_avg_lines):
+            continuous_visibility.append(True)
+        buttons.append(dict(
+            method='update',
+            label='Continuous',
+            args=[{'visible': continuous_visibility}]
+        ))
+
+        # Bar button (shows only playlist bar traces)
+        bar_visibility = []
+        for i in range(total_playlist_traces):
+            if i % 6 == 2:  # Third trace for each playlist (Bar)
+                bar_visibility.append(True)
+            else:
+                bar_visibility.append(False)
+        # Add average lines visibility (False for Bar view)
+        for _ in range(num_avg_lines):
+            bar_visibility.append(False)
+        buttons.append(dict(
+            method='update',
+            label='Bar',
+            args=[{'visible': bar_visibility}]
+        ))
+
+        # Update layout
+        fig.update_layout(
+            title_text="Timeline of When Songs Were Added to Playlists",
+            xaxis_title="Date",
+            yaxis_title="Number of Songs Added",
+            height=600,
+            showlegend=True,
+            updatemenus=[dict(
+                type="buttons",
+                direction="right",
+                y=1.3,
+                x=0.6,
+                buttons=buttons
+            )]
+        )
+
+        # Update x-axis to show dates properly
+        fig.update_xaxes(
+            rangeslider_visible=True,
+            rangeselector=dict(
+                buttons=list([
+                    dict(count=1, label="1m", step="month", stepmode="backward"),
+                    dict(count=6, label="6m", step="month", stepmode="backward"),
+                    dict(count=1, label="YTD", step="year", stepmode="todate"),
+                    dict(count=1, label="1y", step="year", stepmode="backward"),
+                    dict(step="all")
+                ])
+            )
+        )
+
+        return Markup(fig.to_html(full_html=False))
 
     def graph_genres_by_playlists(self):
         '''Return a stacked horizontal bar graph, with each bar being a genre, 
@@ -2030,9 +2613,9 @@ class AnalyzePlaylistPage():
                 anniversary_date = datetime.datetime(year, first_date.month, first_date.day)
                 fig.add_vline(
                     x=anniversary_date,
+                    line_width=2,
                     line_dash="dash",
-                    line_color=YEARLY_VLINE_COLOR,
-                    line_width=1
+                    line_color=YEARLY_VLINE_COLOR
                 )
         
         # Add horizontal lines for global averages (only visible in Continuous view)
@@ -2274,16 +2857,24 @@ class AnalyzePlaylistPage():
 
     def graph_similar_playlists_by_current_in_others(self, top_n=10):
         """Calculate similarity based on % of current playlist songs found in other playlists"""
-        # Special handling for Liked Songs playlist - similarity doesn't make sense
-        if self._playlist == 'Liked Songs':
-            # Return empty graph for Liked Songs
+        UNIQUE_SONGS_DF = self._unique_songs_df
+        mask = UNIQUE_SONGS_DF['playlist'].apply(lambda x: self._playlist in x)
+        df = UNIQUE_SONGS_DF[mask]
+
+        # Get all other playlists that share songs with current playlist
+        other_playlists = {j for i in df['playlist']
+                           for j in i if j != self._playlist}
+        
+        # Filter out empty playlists and ensure we have data to work with
+        if len(other_playlists) == 0:
+            # Return empty graph if no other playlists share songs
             fig = go.Figure()
             fig.update_layout(
                 title=f'Most Similar Playlists by % of {self._playlist} in Playlist',
-                xaxis_title='% of Liked Songs',
+                xaxis_title=f'% of {self._playlist} Songs',
                 yaxis_title='Playlist',
                 annotations=[{
-                    'text': 'Similarity analysis not available for Liked Songs playlist',
+                    'text': f'No other playlists share songs with {self._playlist}',
                     'xref': 'paper',
                     'yref': 'paper',
                     'x': 0.5,
@@ -2293,13 +2884,7 @@ class AnalyzePlaylistPage():
                 }]
             )
             return Markup(fig.to_html(full_html=False))
-        
-        UNIQUE_SONGS_DF = self._unique_songs_df
-        mask = UNIQUE_SONGS_DF['playlist'].apply(lambda x: self._playlist in x)
-        df = UNIQUE_SONGS_DF[mask]
 
-        other_playlists = {j for i in df['playlist']
-                           for j in i if j != self._playlist}
         dicty = dict()
         for p in other_playlists:
             mask = df['playlist'].apply(lambda x: p in x)
@@ -2308,7 +2893,7 @@ class AnalyzePlaylistPage():
 
         total = len(df.index)
         relative = {k: v/total*100 for k,
-                    v in sorted(dicty.items(), key=lambda x: x[1], reverse=True)[:10]}
+                    v in sorted(dicty.items(), key=lambda x: x[1], reverse=True)[:top_n]}
         counts = {k: str(v) for k, v in sorted(
             dicty.items(), key=lambda x: x[1], reverse=True)}
 
@@ -2319,16 +2904,24 @@ class AnalyzePlaylistPage():
 
     def graph_similar_playlists_by_others_in_current(self, top_n=10):
         """Calculate similarity based on % of other playlist songs found in current playlist"""
-        # Special handling for Liked Songs playlist - similarity doesn't make sense
-        if self._playlist == 'Liked Songs':
-            # Return empty graph for Liked Songs
+        UNIQUE_SONGS_DF = self._unique_songs_df
+        mask = UNIQUE_SONGS_DF['playlist'].apply(lambda x: self._playlist in x)
+        current_playlist_df = UNIQUE_SONGS_DF[mask]
+
+        # Get all other playlists that share songs with current playlist
+        other_playlists = {j for i in current_playlist_df['playlist']
+                           for j in i if j != self._playlist}
+        
+        # Filter out empty playlists and ensure we have data to work with
+        if len(other_playlists) == 0:
+            # Return empty graph if no other playlists share songs
             fig = go.Figure()
             fig.update_layout(
                 title=f'Most Similar Playlists by % of Playlist in {self._playlist}',
                 xaxis_title='% of Playlist Songs',
                 yaxis_title='Playlist',
                 annotations=[{
-                    'text': 'Similarity analysis not available for Liked Songs playlist',
+                    'text': f'No other playlists share songs with {self._playlist}',
                     'xref': 'paper',
                     'yref': 'paper',
                     'x': 0.5,
@@ -2338,14 +2931,6 @@ class AnalyzePlaylistPage():
                 }]
             )
             return Markup(fig.to_html(full_html=False))
-        
-        UNIQUE_SONGS_DF = self._unique_songs_df
-        mask = UNIQUE_SONGS_DF['playlist'].apply(lambda x: self._playlist in x)
-        current_playlist_df = UNIQUE_SONGS_DF[mask]
-
-        # Get all other playlists that share songs with current playlist
-        other_playlists = {j for i in current_playlist_df['playlist']
-                           for j in i if j != self._playlist}
         
         dicty = dict()
         counts = dict()
@@ -3112,9 +3697,134 @@ class AnalyzeArtistsPage():
             self._artist_genres.append(row['genres'][ind] if ind != -1 else row['genres'][0])
 
     def graph_artist_timelines(self):
-        return shared_graph_count_timelines(
-            self._all_songs_df, title='Timeline of When Artists\' Songs Were Added to Any Playlist',
-            artists=self._artists, global_artist_averages=self._global_artist_averages)
+        """Create timeline graphs showing when each artist's songs were added to playlists vs Liked Songs"""
+        if not self._artists or len(self._artists) == 0:
+            return None
+        
+        # Get global artist averages
+        global_avg_liked_songs_per_artist = 0
+        global_avg_total_songs_per_artist = 0
+        if self._global_artist_averages:
+            global_avg_liked_songs_per_artist, global_avg_total_songs_per_artist = self._global_artist_averages
+        
+        # Create the figure
+        fig = go.Figure()
+        
+        # Add traces for each artist
+        for i, artist in enumerate(self._artists):
+            color = COLORS[i % len(COLORS)]
+            
+            # Filter data for this artist (excluding Liked Songs playlist)
+            artist_df = self._all_songs_df[
+                (self._all_songs_df['artist'].apply(lambda x: artist in x.split(', '))) &
+                (self._all_songs_df['playlist'] != 'Liked Songs')
+            ]
+            
+            # Filter data for this artist in Liked Songs playlist
+            artist_liked_df = self._all_songs_df[
+                (self._all_songs_df['artist'].apply(lambda x: artist in x.split(', '))) &
+                (self._all_songs_df['playlist'] == 'Liked Songs')
+            ]
+            
+            if len(artist_df.index) > 0:
+                # Group by date and count songs, create hovertext for non-liked songs
+                timeline_data = artist_df.groupby('date_added').agg({
+                    'name': lambda x: list(x),
+                    'artist': lambda x: list(x)
+                }).reset_index()
+                
+                # Create hovertext with song names separated by <br>
+                hovertext = []
+                for _, row in timeline_data.iterrows():
+                    song_names = [f"{name} by {artist}" for name, artist in zip(row['name'], row['artist'])]
+                    hovertext.append('<br>'.join(song_names))
+                
+                # Add Non Liked Songs Continuous trace
+                fig.add_trace(go.Scatter(
+                    x=timeline_data['date_added'],
+                    y=timeline_data['name'].apply(len).cumsum(),
+                    mode='lines+markers',
+                    name=artist + ' Playlist Songs',
+                    line=dict(color=color),
+                    marker=dict(size=6),
+                    hovertext=hovertext,
+                    hovertemplate='<b>%{hovertext}</b><br>' +
+                                'Date: %{x}<br>' +
+                                'Cumulative Songs Added: %{y}<extra></extra>'
+                ))
+            
+            if len(artist_liked_df.index) > 0:
+                # Group by date and count songs, create hovertext for liked songs
+                liked_timeline_data = artist_liked_df.groupby('date_added').agg({
+                    'name': lambda x: list(x),
+                    'artist': lambda x: list(x)
+                }).reset_index()
+                
+                # Create hovertext with song names separated by <br>
+                liked_hovertext = []
+                for _, row in liked_timeline_data.iterrows():
+                    song_names = [f"{name} by {artist}" for name, artist in zip(row['name'], row['artist'])]
+                    liked_hovertext.append('<br>'.join(song_names))
+                
+                # Add Liked Songs Continuous trace
+                fig.add_trace(go.Scatter(
+                    x=liked_timeline_data['date_added'],
+                    y=liked_timeline_data['name'].apply(len).cumsum(),
+                    mode='lines+markers',
+                    name=f"{artist} Liked Songs",
+                    line=dict(color=color),
+                    marker=dict(size=6, symbol='diamond'),
+                    hovertext=liked_hovertext,
+                    hovertemplate='<b>%{hovertext}</b><br>' +
+                                'Date: %{x}<br>' +
+                                'Cumulative Liked Songs: %{y}<extra></extra>'
+                ))
+        
+        # Add horizontal average lines
+        if global_avg_total_songs_per_artist > 0:
+            fig.add_hline(
+                y=global_avg_total_songs_per_artist,
+                line_dash="dash",
+                line_color=MAIN_AVG_COLOR,
+                line_width=2,
+                annotation_text=f"Your Avg # of Songs Added per Artist = {global_avg_total_songs_per_artist:.2f}",
+                annotation_position="top right"
+            )
+        
+        if global_avg_liked_songs_per_artist > 0:
+            fig.add_hline(
+                y=global_avg_liked_songs_per_artist,
+                line_dash="dash",
+                line_color=LIKED_AVG_COLOR,
+                line_width=2,
+                annotation_text=f"Your Avg # of Liked Songs per Artist = {global_avg_liked_songs_per_artist:.2f}",
+                annotation_position="top left"
+            )
+        
+        # Update layout
+        fig.update_layout(
+            title_text="Timeline of When Artists' Songs Were Added to Any Playlist",
+            xaxis_title="Date",
+            yaxis_title="Cumulative Number of Songs Added",
+            height=600,
+            showlegend=True
+        )
+        
+        # Update x-axis to show dates properly
+        fig.update_xaxes(
+            rangeslider_visible=True,
+            rangeselector=dict(
+                buttons=list([
+                    dict(count=1, label="1m", step="month", stepmode="backward"),
+                    dict(count=6, label="6m", step="month", stepmode="backward"),
+                    dict(count=1, label="YTD", step="year", stepmode="todate"),
+                    dict(count=1, label="1y", step="year", stepmode="backward"),
+                    dict(step="all")
+                ])
+            )
+        )
+        
+        return Markup(fig.to_html(full_html=False))
 
     def graph_artist_genres(self):
         return _venn_diagram_artist_genres(
@@ -3304,7 +4014,14 @@ class SingleSongPage():
 
         data = []
         for name, df in zip(names, dfs):
-            data.append(go.Bar(name=name, x=FEATURE_COLS, y=[df.iloc[0]], text=[df.iloc[0]], textposition='auto'))
+            # Round the values for display in text
+            if len(FEATURE_COLS) == 1:
+                # Single column case - df.iloc[0] is a single value
+                rounded_values = [round(df.iloc[0], 2)]
+            else:
+                # Multiple columns case - df.iloc[0] is a list
+                rounded_values = [round(val, 2) for val in df.iloc[0]]
+            data.append(go.Bar(name=name, x=FEATURE_COLS, y=[df.iloc[0]], text=rounded_values, textposition='auto'))
         fig = go.Figure(data=data)
         fig.update_layout(barmode='group', title_text=title)
         return Markup(fig.to_html(full_html=False))
@@ -3383,24 +4100,189 @@ class SingleSongPage():
 
     # What percentage of songs in a playlist or among all playlists have these genres?
     def graph_song_genres_vs_avg(self, playlist=False):
-        if self._song_genres != None:
-            UNIQUE_SONGS_DF = self._unique_songs_df
-            ALL_SONGS_DF = self._all_songs_df
-            avg_df = ALL_SONGS_DF
-            title = 'Percentage of Songs With Same Genres As ' + \
-                self._artist + ' Across All Playlists'
+        """Graph percentage of songs with same genres as current artist"""
+        UNIQUE_SONGS_DF = self._unique_songs_df
+        ALL_SONGS_DF = self._all_songs_df
+        # Require genres column to compute percentages
+        if 'genres' not in UNIQUE_SONGS_DF.columns or 'genres' not in ALL_SONGS_DF.columns:
+            return None
+        
+        if playlist:
+            # New functionality: Percentage of Songs with Same Genres as Artist in Current Playlist
+            if not self._playlist:
+                return None
+            
+            # Get all songs in the current playlist
+            playlist_mask = ALL_SONGS_DF['playlist'] == self._playlist
+            playlist_df = ALL_SONGS_DF[playlist_mask]
+            
+            if len(playlist_df.index) == 0:
+                return None
+            
+            title = 'Percentage of Songs With Same Genres As ' + self._artist + ' in ' + self._playlist
             xaxis = '% of Songs with Genres'
 
             percents = []
-            length = len(avg_df.index)
+            song_counts = []
+            length = len(playlist_df.index) if len(playlist_df.index) > 0 else 1
             for g in self._song_genres:
-                mask = avg_df['genres'].apply(
-                    lambda x: g in {z for y in x for z in y})
-                percents.append(len(avg_df[mask].index)/length*100)
+                try:
+                    mask = playlist_df['genres'].apply(lambda x: g in {z for y in x for z in y})
+                    count = len(playlist_df[mask].index)
+                    percents.append(count/length*100)
+                    song_counts.append(count)
+                except Exception:
+                    percents.append(0.0)
+                    song_counts.append(0)
+
+            # Create hovertext with song counts
+            hovertext = [f"{count} songs ({percent:.1f}%)" for count, percent in zip(song_counts, percents)]
+            
+            series = pd.Series(dict(zip(self._song_genres, percents)))
+            return _h_bar(series, title=title, xaxis=xaxis, percents=True, fixHeight=True, hovertext=hovertext)
+        else:
+            # Original functionality for overall playlists
+            avg_df = ALL_SONGS_DF
+            title = 'Percentage of Songs With Same Genres As ' + self._artist + ' Across All Playlists'
+            xaxis = '% of Songs with Genres'
+
+            percents = []
+            length = len(avg_df.index) if len(avg_df.index) > 0 else 1
+            for g in self._song_genres:
+                try:
+                    mask = avg_df['genres'].apply(lambda x: g in {z for y in x for z in y})
+                    percents.append(len(avg_df[mask].index)/length*100)
+                except Exception:
+                    percents.append(0.0)
 
             series = pd.Series(dict(zip(self._song_genres, percents)))
             return _h_bar(series, title=title, xaxis=xaxis, percents=True, fixHeight=True)
-        return None
+
+    def graph_most_common_artists_with_same_genres(self):
+        """Graph most common artists in playlist with same genres as current artist"""
+        ALL_SONGS_DF = self._all_songs_df
+        # Require genres column to compute percentages
+        if 'genres' not in ALL_SONGS_DF.columns:
+            return None
+        
+        if not self._playlist:
+            return None
+        
+        # Get all songs in the current playlist
+        playlist_mask = ALL_SONGS_DF['playlist'] == self._playlist
+        playlist_df = ALL_SONGS_DF[playlist_mask]
+        
+        if len(playlist_df.index) == 0:
+            return None
+        
+        # Find artists in the playlist that share genres with the current artist
+        shared_genre_artists = {}
+        
+        # Check if current artist has genres other than "N/A"
+        current_has_non_na_genres = any(genre != "N/A" for genre in self._song_genres)
+        
+        for _, row in playlist_df.iterrows():
+            # Split the artist field on commas to handle multiple artists per song
+            song_artists = [artist.strip() for artist in row['artist'].split(',')]
+            
+            # Check if this artist has any shared genres
+            try:
+                artist_genres = row['genres']
+                if artist_genres and isinstance(artist_genres, list):
+                    # Flatten the nested genre structure
+                    flat_artist_genres = {genre for genre_list in artist_genres for genre in genre_list}
+                    
+                    # Check for shared genres
+                    shared_genres = set(self._song_genres) & flat_artist_genres
+                    
+                    if shared_genres:
+                        # Process each artist in the song separately
+                        for artist_name in song_artists:
+                            # Skip the current artist
+                            if artist_name == self._artist:
+                                continue
+                            
+                            # If current artist has non-N/A genres, exclude artists that only share "N/A"
+                            if current_has_non_na_genres and shared_genres == {"N/A"}:
+                                continue
+                            
+                            # This artist shares genres with the current artist
+                            if artist_name not in shared_genre_artists:
+                                shared_genre_artists[artist_name] = {
+                                    'count': 0,
+                                    'songs': [],
+                                    'shared_genres': list(shared_genres)
+                                }
+                            
+                            shared_genre_artists[artist_name]['count'] += 1
+                            shared_genre_artists[artist_name]['songs'].append(row['name'])
+            except Exception:
+                continue
+        
+        if not shared_genre_artists:
+            # No artists with shared genres found
+            fig = go.Figure()
+            fig.update_layout(
+                title_text=f'Most Common Artists in {self._playlist} with Same Genres as {self._artist}',
+                xaxis_title='Number of Songs',
+                yaxis_title='Artist',
+                annotations=[{
+                    'text': f'No artists in {self._playlist} share genres with {self._artist}',
+                    'xref': 'paper',
+                    'yref': 'paper',
+                    'x': 0.5,
+                    'y': 0.5,
+                    'showarrow': False,
+                    'font': {'size': 16}
+                }],
+                height=300
+            )
+            return Markup(fig.to_html(full_html=False))
+        
+        # Create data for the horizontal bar chart
+        artists = []
+        counts = []
+        hovertexts = []
+        
+        # Sort by count (descending) and take top 10 artists
+        sorted_artists = sorted(shared_genre_artists.items(), key=lambda x: x[1]['count'], reverse=True)[:10]
+        
+        for artist_name, data in sorted_artists:
+            artists.append(artist_name)
+            counts.append(data['count'])
+            
+            # Create hovertext with shared genres first, then songs below
+            shared_genres_text = ', '.join(data['shared_genres'])
+            # Cap the songs to MAX_HOVER_ROWS for hovertext
+            songs_text = '<br>'.join(data['songs'][:MAX_HOVER_ROWS])
+            hovertext = f"<b>Shared Genres:</b> {shared_genres_text}<br><br><b>Songs:</b><br>{songs_text}"
+            hovertexts.append(hovertext)
+        
+        # Create the horizontal bar chart
+        fig = go.Figure(data=[go.Bar(
+            x=counts,
+            y=artists,
+            orientation='h',
+            text=counts,
+            textposition='auto',
+            hovertext=hovertexts,
+            hovertemplate='<b>%{hovertext}</b><extra></extra>',
+            marker_color=COLORS[0]  # Use first color from COLORS
+        )])
+        
+        # Update layout
+        fig.update_layout(
+            title_text=f'Most Common Artists in {self._playlist} with Same Genres as {self._artist}',
+            xaxis_title='Number of Songs',
+            yaxis_title='Artist',
+            yaxis={'categoryorder': 'total ascending'},
+            height=min(max((len(artists)+1)*40, 300), 600),  # Responsive height
+            margin=dict(l=20, r=20, t=80, b=20)
+        )
+        
+        fig.update_yaxes(automargin=True)
+        
+        return Markup(fig.to_html(full_html=False))
 
     def graph_all_artists(self):
         artist_top_graphs = []

@@ -61,7 +61,74 @@ app.config['CACHE_DIR'] = cache_fs_folder
 cache = Cache(app)
 cache.init_app(app)
 
+# -------------------------------Middleware-----------------------------------------------
+
+@app.before_request
+def before_request():
+    """Check and refresh tokens before each request to prevent 401 errors."""
+    # Skip for authentication routes
+    if request.endpoint in ['callback', 'login', 'static']:
+        return
+    
+    # Check if user is authenticated
+    if 'access_token' in session:
+        access_token = session.get('access_token')
+        refresh_token = session.get('refresh_token')
+        expires_at = session.get('expires_at')
+        
+        if access_token and refresh_token and expires_at:
+            # Check if token will expire soon (within 2 minutes)
+            current_time = datetime.datetime.utcnow().timestamp()
+            if current_time >= (expires_at - 120):  # 2 minutes buffer
+                # Proactively refresh token
+                new_token_info = refresh_user_token(refresh_token)
+                if not new_token_info:
+                    # Refresh failed, redirect to login
+                    session.clear()
+                    return redirect('/login')
+
 # -------------------------------Authentication Helpers-----------------------------------------------
+
+def refresh_user_token(refresh_token):
+    """Refresh user's access token using refresh token."""
+    try:
+        auth_manager = create_auth_manager()
+        new_token_info = auth_manager.refresh_access_token(refresh_token)
+        
+        if new_token_info and 'access_token' in new_token_info:
+            # Update session with new token info
+            session['access_token'] = new_token_info['access_token']
+            if 'expires_at' in new_token_info:
+                session['expires_at'] = new_token_info['expires_at']
+            if 'refresh_token' in new_token_info:
+                session['refresh_token'] = new_token_info['refresh_token']
+            
+            # Update cache file if user_id can be determined
+            user_id = get_user_id_from_token(new_token_info['access_token'])
+            if user_id:
+                user_path = f'.data/{user_id}/'
+                cache_handler = CacheFileHandler(cache_path=f"{user_path}.cache")
+                cache_handler.save_token_to_cache(new_token_info)
+            
+            return new_token_info
+    except Exception as e:
+        # Log the error for debugging (in production, use proper logging)
+        print(f"Token refresh failed: {str(e)}")
+    
+    return None
+
+def handle_spotify_api_error(e, refresh_token):
+    """Handle Spotify API errors and attempt token refresh if needed."""
+    error_str = str(e).lower()
+    
+    # Check if error is related to expired/invalid token
+    if any(keyword in error_str for keyword in ['expired', 'invalid', '401', 'unauthorized']):
+        if refresh_token:
+            new_token_info = refresh_user_token(refresh_token)
+            if new_token_info:
+                return new_token_info['access_token']
+    
+    return None
 
 def build_redirect_uri():
     """Require explicit SPOTIPY_REDIRECT_URI for exact-match with Spotify settings.
@@ -135,10 +202,29 @@ def verify_secure_cookie(cookie_value):
         return None
 
 def get_current_user():
-    """Get current user info from server-side session."""
+    """Get current user info from server-side session with automatic token refresh."""
     access_token = session.get('access_token')
+    refresh_token = session.get('refresh_token')
+    expires_at = session.get('expires_at')
+    
     if not access_token:
         return None
+
+    # Check if token is expired or will expire soon (within 5 minutes)
+    current_time = datetime.datetime.utcnow().timestamp()
+    if expires_at and current_time >= (expires_at - 300):  # 5 minutes buffer
+        if refresh_token:
+            new_token_info = refresh_user_token(refresh_token)
+            if new_token_info:
+                access_token = new_token_info['access_token']
+            else:
+                # Refresh failed, clear session
+                session.clear()
+                return None
+        else:
+            # No refresh token, clear session
+            session.clear()
+            return None
 
     try:
         spotify = spotipy.Spotify(auth=access_token)
@@ -149,10 +235,42 @@ def get_current_user():
             'access_token': access_token,
             'spotify_client': spotify
         }
-    except:
+    except Exception as e:
+        # If API call fails, try to refresh token one more time
+        if refresh_token:
+            new_access_token = handle_spotify_api_error(e, refresh_token)
+            if new_access_token:
+                try:
+                    # Try API call again with new token
+                    spotify = spotipy.Spotify(auth=new_access_token)
+                    user_info = spotify.me()
+                    return {
+                        'id': user_info['id'],
+                        'display_name': user_info['display_name'],
+                        'access_token': new_access_token,
+                        'spotify_client': spotify
+                    }
+                except:
+                    pass
+        
+        # All attempts failed, clear session
+        session.clear()
         return None
 
 # -------------------------------Web Page Routes-----------------------------------------------
+
+@app.route('/login')
+def login():
+    """Handle login redirects and provide user-friendly authentication page."""
+    # Clear any existing session data
+    session.clear()
+    
+    try:
+        auth_manager = create_auth_manager()
+        auth_url = auth_manager.get_authorize_url()
+        return render_template('login.html', auth_url=auth_url)
+    except Exception as e:
+        return f'<h3>Authentication setup error: {str(e)}</h3>'
 
 # New polling-based setup routes for PythonAnywhere compatibility
 @app.route('/start_setup_1', methods=['GET', 'POST'])
@@ -418,49 +536,63 @@ def index():
 # Spotify OAuth callback
 @app.route('/callback')
 def callback():
-	code = request.args.get('code')
-	if not code:
-		return '<h3>Authentication failed</h3>'
-	
-	try:
-		auth_manager = create_auth_manager()
-		token_info = auth_manager.get_access_token(code)
-		
-		if not token_info:
-			return '<h3>Failed to get access token</h3>'
-		
-		access_token = token_info['access_token']
+    code = request.args.get('code')
+    if not code:
+        return '<h3>Authentication failed</h3>'
+    
+    try:
+        auth_manager = create_auth_manager()
+        token_info = auth_manager.get_access_token(code)
+        
+        if not token_info:
+            return '<h3>Failed to get access token</h3>'
+        
+        access_token = token_info['access_token']
 
-		# Validate token and bind user session
-		user_id = get_user_id_from_token(access_token)
-		if not user_id:
-			return '<h3>Failed to get user info</h3>'
+        # Validate token and bind user session
+        user_id = get_user_id_from_token(access_token)
+        if not user_id:
+            return '<h3>Failed to get user info</h3>'
 
-		# Persist Spotipy token cache under per-user .data directory
-		user_path = f'.data/{user_id}/'
-		if not os.path.exists(user_path):
-			os.makedirs(user_path)
-		cache_handler = CacheFileHandler(cache_path=f"{user_path}.cache")
-		cache_handler.save_token_to_cache(token_info)
-		# Clean up default root .cache if Spotipy created it
-		try:
-			default_cache_path = '.cache'
-			if os.path.exists(default_cache_path):
-				os.remove(default_cache_path)
-		except Exception:
-			pass
+        # Persist Spotipy token cache under per-user .data directory
+        user_path = f'.data/{user_id}/'
+        if not os.path.exists(user_path):
+            os.makedirs(user_path)
+        cache_handler = CacheFileHandler(cache_path=f"{user_path}.cache")
+        cache_handler.save_token_to_cache(token_info)
+        
+        # Clean up default root .cache if Spotipy created it
+        try:
+            default_cache_path = '.cache'
+            if os.path.exists(default_cache_path):
+                os.remove(default_cache_path)
+        except Exception:
+            pass
 
-		session['access_token'] = access_token
-		# Optionally store refresh token/expiry for later phases
-		if 'refresh_token' in token_info:
-			session['refresh_token'] = token_info['refresh_token']
-		if 'expires_at' in token_info:
-			session['expires_at'] = token_info['expires_at']
+        # Store all token information in session
+        session['access_token'] = access_token
+        session['user_id'] = user_id
+        
+        # Store refresh token and expiry for automatic refresh
+        if 'refresh_token' in token_info:
+            session['refresh_token'] = token_info['refresh_token']
+        if 'expires_at' in token_info:
+            session['expires_at'] = token_info['expires_at']
+        else:
+            # If no expires_at provided, calculate it (Spotify tokens typically last 1 hour)
+            session['expires_at'] = datetime.datetime.utcnow().timestamp() + 3600
 
-		return redirect('/')
-		
-	except Exception as e:
-		return f'<h3>Authentication error: {str(e)}</h3>'
+        return redirect('/')
+        
+    except Exception as e:
+        return f'<h3>Authentication error: {str(e)}</h3>'
+
+# Sign out
+@app.route('/logout')
+def logout():
+    """Sign out user and clear session data."""
+    session.clear()
+    return redirect('/')
 
 # Home Page
 def _cache_key_home():
@@ -625,15 +757,15 @@ def currently_playing():
         playlist_timeline = page.graph_count_timeline()
         artist_top_graphs = page.graph_all_artists()
         artist_genres = page.graph_artist_genres()
+        most_common_artists_with_same_genres = page.graph_most_common_artists_with_same_genres() if playlist else None
         genres_playlist_percentiles = page.graph_song_genres_vs_avg(playlist=True) if playlist else None
-        genres_overall_percentiles = page.graph_song_genres_vs_avg()
 
         return render_template('currently_playing.html', song=song, artist=artist, playlist=playlist,
                                 top_rank_table=top_rank_table,
                                 song_features_radar=song_features_radar, song_features_percentiles_bar=song_features_percentiles_bar,
                                 playlist_date_gantt=playlist_date_gantt, playlist_timeline=playlist_timeline,
                                 artist_top_graphs=artist_top_graphs,
-                                artist_genres=artist_genres, genres_playlist_percentiles=genres_playlist_percentiles, genres_overall_percentiles=genres_overall_percentiles,
+                                artist_genres=artist_genres, most_common_artists_with_same_genres=most_common_artists_with_same_genres, genres_playlist_percentiles=genres_playlist_percentiles,
                                 song_id=song_id, artists_url=artists_url, playlist_id=playlist_id if playlist else None)
 
 # About Me Page
@@ -898,7 +1030,12 @@ def analyze_playlists(playlist_ids):
             names = [id_to_name[i] for i in ids]
         except KeyError:
             return 'Playlist IDs not found'
-        page = AnalyzePlaylistsPage(names, all_songs_df, unique_songs_df)
+        # Get global playlist averages from home page for consistency
+        from visualization import HomePage
+        home_page = HomePage(user_path, all_songs_df, unique_songs_df, {})
+        global_playlist_averages = home_page.get_global_playlist_averages()
+        
+        page = AnalyzePlaylistsPage(names, all_songs_df, unique_songs_df, global_playlist_averages)
         boxplots = page.graph_playlists_boxplots()
         boxplot = boxplots[0]
         length = boxplots[1]
