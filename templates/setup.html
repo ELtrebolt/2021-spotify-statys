@@ -50,6 +50,51 @@
             text-align: center;
             color: #666;
         }
+        .messages-container {
+            min-height: 120px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+            margin-top: 10px;
+        }
+        
+        .messages-container.setup-2-messages {
+            max-height: none;
+            overflow-y: visible;
+        }
+        
+        .messages-container.setup-1-messages,
+        .messages-container.setup-3-messages {
+            max-height: none;
+            overflow-y: visible;
+            /* Optimize for long message lists */
+            display: block;
+        }
+        
+        /* Optimize setup 3 for better performance with many messages */
+        .setup-3-messages .message {
+            margin: 3px 0;
+            padding: 3px 5px;
+            font-size: 14px;
+        }
+        .progress-message {
+            background-color: #e8f5e8;
+            padding: 8px;
+            border-radius: 3px;
+            margin-top: 5px;
+            border-left: 3px solid #1db954;
+        }
+        
+        /* Dynamic messages for batch progress updates (e.g., Step 4 in setup2, Artist Genres in setup3) */
+        .dynamic-message {
+            background-color: #fff3cd;
+            padding: 8px;
+            border-radius: 3px;
+            margin-top: 5px;
+            border-left: 3px solid #ffc107;
+            font-weight: bold;
+            color: #856404;
+        }
         .message {
             margin: 5px 0;
             padding: 5px;
@@ -63,37 +108,58 @@
         <h1>Spotify Stats Setup</h1>
         <div id="setup-container">
             <div id="setup-1-container" style="display: none;">
-                <h2>Step 1: Collecting Your Playlists</h2>
+                <h2>Step 1: Collecting Playlists</h2>
                 <div class="progress-bar">
                     <div class="progress-fill" id="progress-1-fill"></div>
                 </div>
                 <div class="status" id="status-1">
                     <div class="loading">Initializing...</div>
                 </div>
-                <div id="messages-1"></div>
+                <div id="messages-1" class="messages-container setup-1-messages"></div>
             </div>
             
             <div id="setup-2-container" style="display: none;">
-                <h2>Step 2: Grouping Your Data</h2>
+                <h2>Step 2: Collecting Audio Features</h2>
                 <div class="progress-bar">
                     <div class="progress-fill" id="progress-2-fill"></div>
                 </div>
                 <div class="status" id="status-2">
                     <div class="loading">Initializing...</div>
                 </div>
-                <div id="messages-2"></div>
+                <div id="messages-2" class="messages-container setup-2-messages"></div>
+            </div>
+            
+            <div id="setup-3-container" style="display: none;">
+                <h2>Step 3: Collecting Top 50 and Genres</h2>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress-3-fill"></div>
+                </div>
+                <div class="status" id="status-3">
+                    <div class="loading">Initializing...</div>
+                </div>
+                <div id="messages-3" class="messages-container setup-3-messages"></div>
             </div>
         </div>
     </div>
 
     <script>
+        var setup1 = "{{ setup1 }}";
         var setup2 = "{{ setup2 }}";
+        var setup3 = "{{ setup3 }}";
+        
         var currentProgressId = null;
         var progressInterval = null;
+        var setupStarted = {1: false, 2: false, 3: false}; // Prevent multiple starts
 
         function updateProgress(progressId, containerId, progressFillId, statusId, messagesId) {
+            console.log(`DEBUG: updateProgress called with progressId: ${progressId}`);
             fetch(`/get_progress/${progressId}`)
-                .then(response => response.json())
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
                 .then(data => {
                     const progressFill = document.getElementById(progressFillId);
                     const status = document.getElementById(statusId);
@@ -109,35 +175,222 @@
                     if (data.status === 'running') {
                         status.innerHTML = `<div class="loading">Processing... ${data.current_step}/${data.total_steps}</div>`;
                     } else if (data.status === 'complete') {
-                        status.innerHTML = '<div class="success">Setup completed successfully!</div>';
+                        status.innerHTML = '<div class="success">Step completed successfully!</div>';
                         clearInterval(progressInterval);
                         
-                        // Redirect after a short delay
-                        setTimeout(() => {
-                            window.location.href = '/home';
-                        }, 2000);
+                        // Reset setupStarted flag for this step
+                        if (containerId === 'setup-1-container') {
+                            setupStarted[1] = false;
+                        } else if (containerId === 'setup-2-container') {
+                            setupStarted[2] = false;
+                        } else if (containerId === 'setup-3-container') {
+                            setupStarted[3] = false;
+                        }
+                        
+                        // Hide current container and show next step in same location
+                        if (containerId === 'setup-1-container') {
+                            setTimeout(() => {
+                                document.getElementById('setup-1-container').style.display = 'none';
+                                startSetup(2);
+                            }, 1000);
+                        } else if (containerId === 'setup-2-container') {
+                            setTimeout(() => {
+                                document.getElementById('setup-2-container').style.display = 'none';
+                                startSetup(3);
+                            }, 1000);
+                        } else {
+                            // Final setup complete, redirect to home
+                            setTimeout(() => {
+                                window.location.href = '/home';
+                            }, 2000);
+                        }
                     } else if (data.status === 'error') {
                         status.innerHTML = `<div class="error">Error: ${data.error}</div>`;
                         clearInterval(progressInterval);
+                        
+                        // Reset setupStarted flag for this step on error
+                        if (containerId === 'setup-1-container') {
+                            setupStarted[1] = false;
+                        } else if (containerId === 'setup-2-container') {
+                            setupStarted[2] = false;
+                        } else if (containerId === 'setup-3-container') {
+                            setupStarted[3] = false;
+                        }
                     }
                     
-                    // Update messages
+                    // Update messages with smart handling for progress updates
                     messages.innerHTML = '';
+                    
+                    // Separate progress messages from regular messages
+                    const regularMessages = [];
+                    let latestProgress = null;
+                    
                     data.messages.forEach(msg => {
-                        const msgDiv = document.createElement('div');
-                        msgDiv.className = 'message';
-                        msgDiv.textContent = msg;
-                        messages.appendChild(msgDiv);
+                        if (msg.startsWith('PROGRESS:')) {
+                            const cleanMsg = msg.substring(9); // Remove 'PROGRESS:' prefix
+                            
+                            // For setup2, include PROGRESS messages in regular messages too
+                            if (containerId === 'setup-2-container') {
+                                regularMessages.push(cleanMsg);
+                            }
+                            
+                            // For setup2, prioritize step descriptions as latestProgress
+                            if (containerId === 'setup-2-container' && 
+                                (cleanMsg.includes('1. Getting All of your Unique Songs') ||
+                                 cleanMsg.includes('2. Retrieving Audio Features Database') ||
+                                 cleanMsg.includes('3. Matching Database with Your Library') ||
+                                 cleanMsg.includes('4. Getting') ||
+                                 cleanMsg.includes('5. Calculating Overall Percentiles') ||
+                                 cleanMsg.includes('6. Caching Your Data'))) {
+                                latestProgress = cleanMsg;
+                            } else if (containerId !== 'setup-2-container') {
+                                latestProgress = cleanMsg;
+                            }
+                        } else {
+                            // For setup3, handle step messages specially
+                            if (containerId === 'setup-3-container' && msg.includes('Step') && msg.includes('/10:')) {
+                                // Extract step number for setup3 progress tracking
+                                const stepMatch = msg.match(/Step (\d+)\/10:/);
+                                if (stepMatch) {
+                                    const stepNum = parseInt(stepMatch[1]);
+                                    // Keep track of latest step for setup3
+                                    if (!latestProgress || stepNum > parseInt(latestProgress.match(/Step (\d+)\/10:/)?.[1] || 0)) {
+                                        latestProgress = msg;
+                                    }
+                                }
+                            }
+                            regularMessages.push(msg);
+                        }
                     });
+                    
+                    // Show messages based on setup step
+                    let messagesToShow;
+                    if (containerId === 'setup-2-container') {
+                        // Setup 2: Show enhanced progress information with dynamic Step 4
+                        messagesToShow = [];
+                        
+                        // Separate Step 4 messages from other messages for dynamic display
+                        const step4Messages = [];
+                        const otherMessages = [];
+                        
+                        regularMessages.forEach(msg => {
+                            if (msg.includes('4. Getting') && msg.includes('Songs') && msg.includes('Without Match')) {
+                                step4Messages.push(msg);
+                            } else {
+                                otherMessages.push(msg);
+                            }
+                        });
+                        
+                        // Add all non-Step 4 messages
+                        messagesToShow.push(...otherMessages);
+                        
+                        // Add only the latest Step 4 message (dynamic update)
+                        if (step4Messages.length > 0) {
+                            const latestStep4 = step4Messages[step4Messages.length - 1];
+                            // Mark this as a dynamic message for special styling
+                            latestStep4.isDynamic = true;
+                            messagesToShow.push(latestStep4);
+                        }
+                    } else if (containerId === 'setup-3-container') {
+                        // Setup 3: Show all progress lines with dynamic artist genres
+                        messagesToShow = [];
+                        
+                        // Separate artist genres messages from other messages for dynamic display
+                        const artistGenresMessages = [];
+                        const otherMessages = [];
+                        
+                        regularMessages.forEach(msg => {
+                            if (msg.includes('Getting Artist Genres') && msg.includes('artists collected')) {
+                                artistGenresMessages.push(msg);
+                            } else {
+                                otherMessages.push(msg);
+                            }
+                        });
+                        
+                        // Add all non-artist genres messages
+                        messagesToShow.push(...otherMessages);
+                        
+                        // Add only the latest artist genres message (dynamic update)
+                        if (artistGenresMessages.length > 0) {
+                            const latestArtistGenres = artistGenresMessages[artistGenresMessages.length - 1];
+                            // Mark this as a dynamic message for special styling
+                            latestArtistGenres.isDynamic = true;
+                            messagesToShow.push(latestArtistGenres);
+                        }
+                    } else {
+                        // Setup 1: Show all messages
+                        messagesToShow = regularMessages;
+                    }
+                    
+                    // Optimize message rendering for setup 3
+                    if (containerId === 'setup-3-container' && regularMessages.length > 50) {
+                        // For setup 3 with many messages, use document fragment for better performance
+                        const fragment = document.createDocumentFragment();
+                        messagesToShow.forEach(msg => {
+                            const msgDiv = document.createElement('div');
+                            msgDiv.className = msg.isDynamic ? 'message dynamic-message' : 'message';
+                            msgDiv.textContent = msg;
+                            fragment.appendChild(msgDiv);
+                        });
+                        messages.appendChild(fragment);
+                    } else {
+                        // For setup 1 and 2, use normal append
+                        messagesToShow.forEach(msg => {
+                            const msgDiv = document.createElement('div');
+                            msgDiv.className = msg.isDynamic ? 'message dynamic-message' : 'message';
+                            msgDiv.textContent = msg;
+                            messages.appendChild(msgDiv);
+                        });
+                    }
+                    
+                    // Show latest progress as a highlighted message
+                    if (latestProgress) {
+                        const progressDiv = document.createElement('div');
+                        progressDiv.className = 'message progress-message';
+                        progressDiv.style.fontWeight = 'bold';
+                        progressDiv.style.color = '#1db954';
+                        progressDiv.style.fontSize = '16px';
+                        progressDiv.style.marginBottom = '10px';
+                        progressDiv.textContent = latestProgress;
+                        messages.appendChild(progressDiv);
+                    }
                 })
                 .catch(error => {
                     console.error('Error fetching progress:', error);
+                    // If authentication error, redirect to login
+                    if (error.message.includes('401') || error.message.includes('status: 401')) {
+                        clearInterval(progressInterval);
+                        window.location.href = '/';
+                    }
                 });
         }
 
         function startSetup(step) {
-            const endpoint = step === 1 ? '/start_setup_1' : '/start_setup_2';
-            const containerId = step === 1 ? 'setup-1-container' : 'setup-2-container';
+            // Prevent multiple starts of the same setup step
+            if (setupStarted[step]) {
+                console.log(`Setup ${step} already started, skipping...`);
+                return;
+            }
+            setupStarted[step] = true;
+            
+            // Clear any existing progress interval
+            if (progressInterval) {
+                console.log(`DEBUG: Clearing existing progress interval before starting Setup ${step}`);
+                clearInterval(progressInterval);
+                progressInterval = null;
+            }
+            
+            let endpoint, containerId;
+            if (step === 1) {
+                endpoint = '/start_setup_1';
+                containerId = 'setup-1-container';
+            } else if (step === 2) {
+                endpoint = '/start_setup_2';
+                containerId = 'setup-2-container';
+            } else if (step === 3) {
+                endpoint = '/start_setup_3';
+                containerId = 'setup-3-container';
+            }
             
             // Show the appropriate container
             document.getElementById(containerId).style.display = 'block';
@@ -148,17 +401,28 @@
                     'Content-Type': 'application/json',
                 }
             })
-            .then(response => response.json())
-            .then(data => {
-                if (data.error) {
-                    document.getElementById(`status-${step}`).innerHTML = `<div class="error">Error: ${data.error}</div>`;
-                    return;
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
                 }
-                
-                currentProgressId = data.progress_id;
-                
-                // Start polling for progress
+                return response.json();
+            })
+                            .then(data => {
+                    if (data.error) {
+                        document.getElementById(`status-${step}`).innerHTML = `<div class="error">Error: ${data.error}</div>`;
+                        return;
+                    }
+                    
+                    currentProgressId = data.progress_id;
+                    console.log(`DEBUG: Setup ${step} started with progress_id: ${currentProgressId}`);
+                    
+                    // Reset setupStarted flag when starting a new setup
+                    setupStarted[step] = false;
+                    
+                    // Start polling for progress - optimize frequency for setup 3
+                    const pollInterval = (step === 3) ? 2000 : 1000; // Slower for setup 3
                 progressInterval = setInterval(() => {
+                    console.log(`DEBUG: Polling progress for ${currentProgressId} (Setup ${step})`);
                     updateProgress(
                         currentProgressId, 
                         containerId, 
@@ -166,7 +430,7 @@
                         `status-${step}`, 
                         `messages-${step}`
                     );
-                }, 1000);
+                }, pollInterval);
                 
                 // Initial progress update
                 updateProgress(
@@ -179,15 +443,25 @@
             })
             .catch(error => {
                 console.error('Error starting setup:', error);
-                document.getElementById(`status-${step}`).innerHTML = '<div class="error">Error starting setup</div>';
+                // If authentication error, redirect to login
+                if (error.message.includes('401') || error.message.includes('status: 401')) {
+                    window.location.href = '/';
+                } else {
+                    document.getElementById(`status-${step}`).innerHTML = '<div class="error">Error starting setup</div>';
+                }
             });
         }
 
         // Auto-start the appropriate setup step
-        if (setup2 === 'false') {
+        if (setup1 === 'false') {
             startSetup(1);
-        } else {
+        } else if (setup2 === 'false') {
             startSetup(2);
+        } else if (setup3 === 'false') {
+            startSetup(3);
+        } else {
+            // All setup complete, redirect to home
+            window.location.href = '/home';
         }
     </script>
 </body>

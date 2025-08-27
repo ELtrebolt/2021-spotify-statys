@@ -1,7 +1,6 @@
 # visualization.py = contains Page Classes which have some unique and shared functions to make graphs
 
 # Imports --------------------------------------------------------------------
-import pickle
 from collections import defaultdict
 import datetime
 from re import A
@@ -24,11 +23,18 @@ temp_dir = tempfile.TemporaryDirectory()
 os.environ['MPLCONFIGDIR'] = temp_dir.name
 import matplotlib
 matplotlib.use('Agg')
+import json
+import gzip
+from flask import Markup
+import traceback
+import shutil
 
 # Constants -------------------------------------------------------------------
 
-PERCENTILE_COLS = ['popularity', 'duration']
-FEATURE_COLS = ['popularity']
+# PERCENTILE_COLS = ['popularity']
+PERCENTILE_COLS = ['popularity', 'danceability', 'energy', 'speechiness', 'acousticness', 'instrumentalness', 'liveness', 'valence', 'duration', 'tempo', 'loudness']
+# FEATURE_COLS = ['popularity']
+FEATURE_COLS = ['popularity', 'danceability', 'energy', 'speechiness', 'acousticness', 'instrumentalness', 'liveness', 'valence']
 
 LABEL_CUTOFF_LENGTH = 25
 MAX_HOVER_ROWS = 10
@@ -297,15 +303,6 @@ def _make_single_subplot(labels, figs, xaxis, yaxis, title, rows=1):
         fig.update_traces(visible=False, selector=k)
     return fig
 
-
-def _dump(path, obj):
-    with open(path, 'wb') as f:   
-        pickle.dump(obj, f)
-
-
-def _load(path):
-    with open(path, 'rb') as f:  
-        return pickle.load(f)
 
 # Shared Functions -----------------------------------------------------------------------------------------
 
@@ -751,7 +748,7 @@ def shared_graph_top_playlists_by_artist(ALL_SONGS_DF, artist_name):
     mask = ALL_SONGS_DF['artist'].apply(lambda x: artist_name in x.split(', '))
     df = ALL_SONGS_DF[mask]
 
-    series = df['playlist'].value_counts(ascending=True).head(10)
+    series = df['playlist'].value_counts(ascending=False).head(10).sort_values(ascending=True)
     df = df.groupby(['playlist'], as_index=False)[['name']].agg(lambda x: '<br>'.join(x.head(MAX_HOVER_ROWS)))
 
     return _h_bar(series, title='Most Common Playlists For Artist: ' + artist_name,
@@ -875,6 +872,136 @@ def shared_graph_top_rank_table(df):
     return Markup(fig.to_html(full_html=False))
 
 
+# Optimized Base Class for Progressive Loading and DataFrame Operations
+class OptimizedPageBase:
+    """
+    Base class that provides optimized DataFrame operations and progressive loading capabilities.
+    This class maintains backward compatibility while adding performance optimizations.
+    """
+    
+    def __init__(self, path, all_songs_df, unique_songs_df, **kwargs):
+        self._path = path
+        self._all_songs_df = pd.DataFrame(all_songs_df)
+        self._unique_songs_df = pd.DataFrame(unique_songs_df)
+        
+        # Pre-compute common aggregations for faster access
+        self._precompute_common_aggregations()
+        
+        # Progressive loading state
+        self._loaded_components = set()
+        self._component_cache = {}
+    
+    def _precompute_common_aggregations(self):
+        """Pre-compute common aggregations to avoid repeated calculations"""
+        # Optimize playlist operations
+        if 'playlist' in self._all_songs_df.columns:
+            # Create playlist counts lookup
+            self._playlist_counts = self._all_songs_df['playlist'].value_counts()
+            
+            # Create playlist duration lookup
+            if 'duration' in self._all_songs_df.columns:
+                self._playlist_durations = self._all_songs_df.groupby('playlist')['duration'].sum()
+            
+            # Create playlist explicit content lookup
+            if 'explicit' in self._all_songs_df.columns:
+                self._playlist_explicit_counts = self._all_songs_df.groupby('playlist')['explicit'].sum()
+                self._playlist_explicit_percentages = self._all_songs_df.groupby('playlist')['explicit'].mean()
+        
+        # Optimize artist operations
+        if 'artist' in self._all_songs_df.columns:
+            # Create artist lookup for faster searching
+            self._artist_to_songs = {}
+            for idx, row in self._all_songs_df.iterrows():
+                artists = [a.strip() for a in str(row['artist']).split(', ')]
+                for artist in artists:
+                    if artist not in self._artist_to_songs:
+                        self._artist_to_songs[artist] = []
+                    self._artist_to_songs[artist].append(idx)
+        
+        # Optimize date operations
+        if 'date_added' in self._all_songs_df.columns:
+            # Convert dates once and store
+            self._all_songs_df['date_added_parsed'] = pd.to_datetime(self._all_songs_df['date_added'], errors='coerce')
+            
+            # Only process unique_songs_df if it has data and the required column
+            if len(self._unique_songs_df) > 0 and 'date_added' in self._unique_songs_df.columns:
+                self._unique_songs_df['date_added_parsed'] = pd.to_datetime(self._unique_songs_df['date_added'], errors='coerce')
+    
+    def load_component_progressively(self, component_name, loader_func, *args, **kwargs):
+        """
+        Progressive loading: Load components on-demand and cache results.
+        This allows pages to load faster by only computing what's needed.
+        """
+        if component_name not in self._loaded_components:
+            # Load and cache the component
+            result = loader_func(*args, **kwargs)
+            self._component_cache[component_name] = result
+            self._loaded_components.add(component_name)
+            return result
+        else:
+            # Return cached result
+            return self._component_cache[component_name]
+    
+    def get_optimized_playlist_data(self, playlist_name):
+        """Optimized playlist data retrieval using pre-computed lookups"""
+        if hasattr(self, '_playlist_counts') and playlist_name in self._playlist_counts:
+            return {
+                'count': self._playlist_counts[playlist_name],
+                'duration': self._playlist_durations.get(playlist_name, 0) if hasattr(self, '_playlist_durations') else 0,
+                'explicit_count': self._playlist_explicit_counts.get(playlist_name, 0) if hasattr(self, '_playlist_explicit_counts') else 0,
+                'explicit_percentage': self._playlist_explicit_percentages.get(playlist_name, 0) if hasattr(self, '_playlist_explicit_percentages') else 0
+            }
+        return None
+    
+    def get_optimized_artist_data(self, artist_name):
+        """Optimized artist data retrieval using pre-computed lookups"""
+        if hasattr(self, '_artist_to_songs') and artist_name in self._artist_to_songs:
+            song_indices = self._artist_to_songs[artist_name]
+            return self._all_songs_df.iloc[song_indices]
+        return pd.DataFrame()
+    
+    def vectorized_date_filter(self, date_column, target_date):
+        """Vectorized date filtering for better performance"""
+        if hasattr(self, '_all_songs_df') and f'{date_column}_parsed' in self._all_songs_df.columns:
+            # Use pre-parsed dates for faster filtering
+            parsed_column = f'{date_column}_parsed'
+            try:
+                # Handle date format like "08-27" (MM-DD)
+                if '-' in target_date and len(target_date.split('-')) == 2:
+                    month, day = target_date.split('-')
+                    # Create a proper date string for parsing
+                    target_date_str = f"2023-{month}-{day}"  # Use arbitrary year
+                    target_date_parsed = pd.to_datetime(target_date_str)
+                    return self._all_songs_df[self._all_songs_df[parsed_column].dt.strftime('%m-%d') == target_date_parsed.strftime('%m-%d')]
+                else:
+                    # Fallback to string matching for other formats
+                    return self._all_songs_df[self._all_songs_df[date_column].str.contains(target_date, na=False)]
+            except Exception:
+                # Fallback to string matching if date parsing fails
+                return self._all_songs_df[self._all_songs_df[date_column].str.contains(target_date, na=False)]
+        else:
+            # Fallback to string matching
+            return self._all_songs_df[self._all_songs_df[date_column].str.contains(target_date, na=False)]
+    
+    def optimized_groupby_operation(self, df, group_column, agg_columns, agg_functions):
+        """
+        Optimized groupby operations with vectorized aggregations.
+        This replaces slow apply() operations with faster vectorized alternatives.
+        """
+        # Create aggregation dictionary
+        agg_dict = {}
+        for col, func in zip(agg_columns, agg_functions):
+            if col in df.columns:
+                agg_dict[col] = func
+        
+        if not agg_dict:
+            return pd.DataFrame()
+        
+        # Perform optimized groupby
+        result = df.groupby(group_column).agg(agg_dict).reset_index()
+        return result
+
+
 # Currently Playing Page ----------------------------------------------------------------------------------------------
 class CurrentlyPlayingPage():
     def __init__(self, song, artist, playlist, all_songs_df, unique_songs_df):
@@ -905,62 +1032,138 @@ class CurrentlyPlayingPage():
         return shared_graph_top_rank_table(self._song_df)
 
     def graph_song_features_vs_avg(self):
+        """
+        Create a vertical bar graph comparing audio features across different data sources.
+        Features: playlist median, all playlists median, artist median, and song's actual values.
+        """
         UNIQUE_SONGS_DF = self._unique_songs_df
         ALL_SONGS_DF = self._all_songs_df
 
-        song_df = self._song_df[FEATURE_COLS]
+        # Get the specific song data
+        song_df = UNIQUE_SONGS_DF[UNIQUE_SONGS_DF['name'] == self._song]
+        song_df = song_df[song_df['artist'] == self._artist]
 
+        if len(song_df) == 0:
+            return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Song not found in dataset</div>')
+
+        # Filter for available feature columns
+        available_feature_cols = []
+        for col in FEATURE_COLS:
+            if col in song_df.columns and not song_df[col].isna().all():
+                available_feature_cols.append(col)
+        
+        if not available_feature_cols:
+            return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">No audio features data available for this song</div>')
+
+        # Get song's actual values
+        song_values = song_df[available_feature_cols].iloc[0]
+
+        # Get playlist median (if playlist exists)
+        playlist_median = None
         if self._playlist:
-            playlist_df = ALL_SONGS_DF[ALL_SONGS_DF['playlist']
-                                       == self._playlist][FEATURE_COLS]
-        artist_dfs = [UNIQUE_SONGS_DF[UNIQUE_SONGS_DF['artist'].apply(lambda x: i in x)]
-                        [FEATURE_COLS] for i in self._artist.split(', ')]
-        avg_df = UNIQUE_SONGS_DF[FEATURE_COLS]
+            playlist_df = ALL_SONGS_DF[ALL_SONGS_DF['playlist'] == self._playlist]
+            if len(playlist_df) > 0:
+                playlist_median = playlist_df[available_feature_cols].median()
 
-        if self._playlist:
-            dfs = [playlist_df, avg_df, song_df]
-        else:
-            dfs = [avg_df, song_df]
+        # Get all playlists median
+        all_playlists_median = UNIQUE_SONGS_DF[available_feature_cols].median()
 
-        for df in dfs:
-            df['popularity'] = round(df['popularity']/100, 2)
-        dfs = [df.median(axis=0) for df in dfs]
+        # Get artist median for each artist in the comma-separated list
+        artist_medians = []
+        for artist_name in self._artist.split(', '):
+            artist_df = UNIQUE_SONGS_DF[UNIQUE_SONGS_DF['artist'].apply(lambda x: artist_name in x)]
+            if len(artist_df) > 0:
+                artist_median = artist_df[available_feature_cols].median()
+                artist_medians.append((artist_name, artist_median))
 
-        for df in artist_dfs:
-            df['popularity'] = round(df['popularity']/100, 2)
-        artist_dfs = [df.median(axis=0) for df in artist_dfs]
-
-        # add song values to last so features and percentiles avgs match colors
-        song_vals = dfs[-1]
-        dfs = dfs[:-1]
-        dfs += artist_dfs
-        dfs.append(song_vals)
-
-        if self._playlist:
-            names = [self._playlist, 'All Playlists'] + self._artist.split(', ') + [self._song]
-        else:
-            names = ['All Playlists'] + self._artist.split(', ') + [self._song]
-
-        if self._playlist:
-            title = 'Song Audio Features vs. Median Song from Playlist, All Playlists, & Artist'
-        else:
-            title = 'Song Audio Features vs. Median Song from All Playlists & Artist'
-
+        # Prepare data for plotting
         data = []
-        for name, df in zip(names, dfs):
-            # Round the values for display in text
-            if len(FEATURE_COLS) == 1:
-                # Single column case - df.iloc[0] is a single value
-                rounded_values = [round(df.iloc[0], 2)]
-            else:
-                # Multiple columns case - df.iloc[0] is a list
-                rounded_values = [round(val, 2) for val in df.iloc[0]]
-            data.append(go.Bar(name=name, x=FEATURE_COLS, y=[df.iloc[0]], text=rounded_values, textposition='auto'))
-        fig = go.Figure(data=data)
-        fig.update_layout(barmode='group', title_text=title)
+        names = []
+        
+        # Add playlist median if it exists
+        if playlist_median is not None:
+            data.append(playlist_median)
+            names.append(self._playlist)
+        
+        # Add all playlists median
+        data.append(all_playlists_median)
+        names.append('All Playlists')
+        
+        # Add artist medians
+        for artist_name, artist_median in artist_medians:
+            data.append(artist_median)
+            names.append(artist_name)
+        
+        # Add song's actual values
+        data.append(song_values)
+        names.append(self._song)
+
+        # Normalize popularity to 0-1 scale and round all values to 2 decimal places
+        for i, df in enumerate(data):
+            if 'popularity' in df.index:
+                data[i]['popularity'] = round(df['popularity'] / 100, 2)
+            # Round all other values to 2 decimal places
+            for col in df.index:
+                if col != 'popularity' and not pd.isna(df[col]):
+                    data[i][col] = round(df[col], 2)
+
+        # Create the bar chart
+        fig = go.Figure()
+        
+        for i, (name, values) in enumerate(zip(names, data)):
+            # Convert to list and handle any NaN values
+            y_values = []
+            text_values = []
+            for col in available_feature_cols:
+                val = values[col]
+                if pd.isna(val):
+                    y_values.append(0)
+                    text_values.append('N/A')
+                else:
+                    y_values.append(val)  # Already rounded above
+                    text_values.append(val)  # Already rounded above
+            
+            fig.add_trace(go.Bar(
+                name=name,
+                x=available_feature_cols,
+                y=y_values,
+                text=text_values,
+                textposition='auto',
+                hovertemplate='<b>%{fullData.name}</b><br>' +
+                            'Feature: %{x}<br>' +
+                            'Value: %{y}<br>' +
+                            '<extra></extra>'
+            ))
+
+        # Update layout
+        if self._playlist:
+            title = 'Song Audio Features vs. Medians in Playlist, All Playlists, & Artist'
+        else:
+            title = 'Song Audio Features vs. Medians in All Playlists & Artist'
+            
+        
+        fig.update_layout(
+            title=title,
+            xaxis_title='Audio Features',
+            yaxis_title='Feature Values',
+            barmode='group',
+            showlegend=True,
+            height=500
+        )
+
         return Markup(fig.to_html(full_html=False))
 
     def graph_song_percentiles_vs_avg(self):
+        """
+        Create percentile comparison graph for song audio features.
+        
+        Improvements made:
+        - NaN values are filtered out before percentile calculation
+        - Playlist percentiles use method='max' for consistent ranking
+        - Artist percentiles use method='min' to avoid 100th percentile for single songs
+        - Single song cases are set to 0 (since 0% of songs are below them)
+        - Consistent data filtering and validation across all percentile calculations
+        """
         UNIQUE_SONGS_DF = self._unique_songs_df
         ALL_SONGS_DF = self._all_songs_df
 
@@ -977,9 +1180,22 @@ class CurrentlyPlayingPage():
                 playlist_df = pd.concat([playlist_df, song_df])
 
             for col in PERCENTILE_COLS:
-                sz = playlist_df[col].size-1
-                playlist_df[col + '_percentile'] = playlist_df[col].rank(
-                    method='max').apply(lambda x: 100.0*(x-1)/sz)
+                if col in playlist_df.columns and not playlist_df[col].isna().all():
+                    # Filter out NaN values before calculating percentiles
+                    valid_data = playlist_df[col].dropna()
+                    if len(valid_data) > 0:
+                        sz = valid_data.size - 1
+                        if sz > 0:
+                            # Use method='max' for consistent ranking
+                            playlist_df[col + '_percentile'] = valid_data.rank(
+                                method='max').apply(lambda x: round(100.0*(x-1)/sz, 2))
+                        else:
+                            # Single song case - set to 0 (since 0% of songs are below them)
+                            playlist_df[col + '_percentile'] = 0.0
+                    else:
+                        playlist_df[col + '_percentile'] = 0.0
+                else:
+                    playlist_df[col + '_percentile'] = 0.0
             playlist_df = playlist_df[(playlist_df['name'] == self._song) & (playlist_df['artist'] == self._artist)]
 
         artist_dfs = []
@@ -987,12 +1203,22 @@ class CurrentlyPlayingPage():
             mask = UNIQUE_SONGS_DF['artist'].apply(lambda x: a in x.split(', '))
             artist_df = UNIQUE_SONGS_DF[mask]
             for col in PERCENTILE_COLS:
-                sz = artist_df[col].size-1
-                if sz > 0:
-                    artist_df[col + '_percentile'] = artist_df[col].rank(
-                        method='max').apply(lambda x: 100.0*(x-1)/sz)
+                if col in artist_df.columns and not artist_df[col].isna().all():
+                    # Filter out NaN values before calculating percentiles
+                    valid_data = artist_df[col].dropna()
+                    if len(valid_data) > 0:
+                        sz = valid_data.size - 1
+                        if sz > 0:
+                            # Use method='min' for artist percentiles to avoid 100th percentile for single songs
+                            artist_df[col + '_percentile'] = valid_data.rank(
+                                method='min').apply(lambda x: round(100.0*(x-1)/sz, 2))
+                        else:
+                            # Single song case - set to 0 (since 0% of songs are below them)
+                            artist_df[col + '_percentile'] = 0.0
+                    else:
+                        artist_df[col + '_percentile'] = 0.0
                 else:
-                    artist_df[col + '_percentile'] = [0]
+                    artist_df[col + '_percentile'] = 0.0
             artist_df = artist_df[artist_df['name'] == self._song]
             if len(artist_df.index) == 0:
                 return None
@@ -1002,7 +1228,17 @@ class CurrentlyPlayingPage():
         avg_df = UNIQUE_SONGS_DF[UNIQUE_SONGS_DF['name'] == self._song]
         avg_df = avg_df[avg_df['artist'] == self._artist]
 
-        cols = [i + '_percentile' for i in PERCENTILE_COLS]
+        # Filter for available percentile columns (only show features that have data)
+        available_percentile_cols = []
+        for col in PERCENTILE_COLS:
+            percentile_col = col + '_percentile'
+            if percentile_col in avg_df.columns and not avg_df[percentile_col].isna().all():
+                available_percentile_cols.append(percentile_col)
+        
+        if not available_percentile_cols:
+            return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">No audio features data available for this song</div>')
+        
+        cols = available_percentile_cols
 
         dfs = {}
         if self._playlist:
@@ -1012,8 +1248,37 @@ class CurrentlyPlayingPage():
             dfs[i] = j
 
         data = []
+        # Create x-axis labels from the available percentile columns (remove '_percentile' suffix)
+        x_labels = [col.replace('_percentile', '') for col in available_percentile_cols]
+        
         for name, df in dfs.items():
-            data.append(go.Bar(name=name, x=PERCENTILE_COLS, y=df.iloc[0], text=df.iloc[0].astype(int), textposition='auto'))
+            # Handle NaN values safely when converting to text
+            y_values = df.iloc[0]
+            text_values = []
+            hover_values = []
+            for val in y_values:
+                if pd.isna(val):
+                    text_values.append('N/A')
+                    hover_values.append('N/A')
+                else:
+                    # Convert to integer for bar display (no decimals)
+                    bar_val = int(round(val, 0))
+                    text_values.append(bar_val)
+                    # Keep 2 decimal places for hover text (precision)
+                    hover_val = round(val, 2)
+                    hover_values.append(hover_val)
+            
+            data.append(go.Bar(
+                name=name, 
+                x=x_labels, 
+                y=y_values, 
+                text=text_values, 
+                textposition='auto',
+                hovertemplate='<b>%{fullData.name}</b><br>' +
+                             'Feature: %{x}<br>' +
+                             'Percentile: %{customdata}<extra></extra>',
+                customdata=hover_values
+            ))
 
         fig = go.Figure(data=data)
 
@@ -1340,22 +1605,19 @@ class CurrentlyPlayingPage():
 
 # Home Page ----------------------------------------------------------------------------------------------
 
-class HomePage():
+class HomePage(OptimizedPageBase):
     def __init__(self, path, all_songs_df, unique_songs_df, playlist_dict=None):
+        # Initialize parent class with optimizations
+        super().__init__(path, all_songs_df, unique_songs_df)
+        
         self._today = datetime.datetime.now().astimezone()
-        self._path = path
-        self._all_songs_df = pd.DataFrame(all_songs_df)
-        self._unique_songs_df = pd.DataFrame(unique_songs_df)
         self._playlist_dict = playlist_dict or {}
 
         # Calculate global artist averages once for consistency across all artist timelines
         self._calculate_global_artist_averages()
 
-        # Generate page fragments in-memory
-        self._on_this_date = self._graph_on_this_date()
-        self._timeline = self._graph_count_timeline()
-        self._last_added = self._graph_last_added()
-        self._totals = self._get_library_totals()
+        # Progressive loading: Don't generate all components upfront
+        # Components will be loaded on-demand when requested
 
     def _calculate_global_artist_averages(self):
         """Calculate global averages for liked songs and total songs per artist across all playlists"""
@@ -1433,16 +1695,16 @@ class HomePage():
         return self._global_avg_liked_songs_per_playlist, self._global_avg_total_songs_per_playlist
 
     def load_on_this_date(self):
-        return self._on_this_date
+        return self.load_component_progressively('on_this_date', self._graph_on_this_date)
 
     def load_timeline(self):
-        return self._timeline
+        return self.load_component_progressively('timeline', self._graph_count_timeline)
 
     def load_last_added(self):
-        return self._last_added
+        return self.load_component_progressively('last_added', self._graph_last_added)
 
     def load_totals(self):
-        return self._totals
+        return self.load_component_progressively('totals', self._get_library_totals)
 
     def load_first_times(self):
         # Always return a list so templates that iterate do not split characters
@@ -1453,56 +1715,67 @@ class HomePage():
     def _graph_on_this_date(self):
         '''Output1 = Table = Year | Playlist | Songs Added
         Output2 = List = You created playlist / added song from artist for the first time'''
-        ALL_SONGS_DF = self._all_songs_df
         today = str(self._today.date())[5:]
-        df = ALL_SONGS_DF[ALL_SONGS_DF['date_added'].apply(lambda x: today in x)]
+        
+        # Use optimized date filtering
+        df = self.vectorized_date_filter('date_added', today)
         first_times = []
 
-        df['year'] = [i[:4] for i in df['date_added']]
+        # Vectorized year extraction
+        df['year'] = df['date_added'].str[:4]
         df = df[['name', 'artist', 'playlist', 'year']]
 
         if len(df.index) == 0:
             first_times.append('No notable anniversaries found')
         else:
-            for a in {j for i in df['artist'] for j in i.split(', ')}:
-                artist_df = ALL_SONGS_DF[ALL_SONGS_DF['artist'].apply(
-                    lambda x: a in x.split(', '))]
-                first_date = artist_df['date_added'].sort_values(
-                    ascending=True).iloc[0]
-                if str(first_date)[5:] == today:
-                    # Check if artist meets criteria: 5+ songs OR at least 1 liked song
-                    artist_song_count = len(artist_df.index)
-                    has_liked_songs = 'Liked Songs' in artist_df['playlist'].values
-                    
-                    if artist_song_count >= MIN_ARTIST_SONG_COUNT_FOR_ON_THIS_DATE or has_liked_songs:
-                        years_ago = int(str(self._today.date())[
-                                        :4])-int(str(first_date)[:4])
-                        first_times.append(
-                                (years_ago, 'You first added a song from the artist <a href="/artists/' + quote(a) + '">' + a + '</a> ' + str(years_ago) + ' years ago today!'))
-            first_times = [i[1] for i in sorted(first_times, key = lambda x: x[0], reverse=True)]
+            # Vectorized artist extraction and filtering
+            unique_artists = set()
+            for artist_list in df['artist']:
+                unique_artists.update(artist_list.split(', '))
+            
+            for artist in unique_artists:
+                # Use optimized artist data retrieval
+                artist_df = self.get_optimized_artist_data(artist)
+                if len(artist_df) > 0:
+                    first_date = artist_df['date_added'].sort_values(ascending=True).iloc[0]
+                    if str(first_date)[5:] == today:
+                        # Check if artist meets criteria: 5+ songs OR at least 1 liked song
+                        artist_song_count = len(artist_df.index)
+                        has_liked_songs = 'Liked Songs' in artist_df['playlist'].values
+                        
+                        if artist_song_count >= MIN_ARTIST_SONG_COUNT_FOR_ON_THIS_DATE or has_liked_songs:
+                            years_ago = int(str(self._today.date())[:4]) - int(str(first_date)[:4])
+                            first_times.append(
+                                (years_ago, 'You first added a song from the artist <a href="/artists/' + quote(artist) + '">' + artist + '</a> ' + str(years_ago) + ' years ago today!'))
+            
+            first_times = [i[1] for i in sorted(first_times, key=lambda x: x[0], reverse=True)]
         
-            for p in df['playlist'].unique():
-                playlist_df = ALL_SONGS_DF[ALL_SONGS_DF['playlist'] == p]
-                first_date = playlist_df['date_added'].sort_values(
-                    ascending=True).iloc[0]
-                if str(first_date)[5:] == today:
-                    years_ago = int(str(self._today.date())[
-                                    :4])-int(str(first_date)[:4])
-                    
-                    # Create playlist link using ID if available
-                    if p == 'Liked Songs':
-                        # Special case for Liked Songs
-                        playlist_link = '<a href="/playlists/liked_songs">' + p + '</a>'
-                    elif p in self._playlist_dict:
-                        # Use playlist ID for regular playlists
-                        playlist_id = self._playlist_dict[p]
-                        playlist_link = '<a href="/playlists/' + playlist_id + '">' + p + '</a>'
-                    else:
-                        # Fallback to name if no ID found
-                        playlist_link = p
-                    
-                    first_times.append(
-                        'You created the playlist ' + playlist_link + ' ' + str(years_ago) + ' years ago today!')
+            # Vectorized playlist processing
+            for playlist_name in df['playlist'].unique():
+                # Use optimized playlist data retrieval
+                playlist_data = self.get_optimized_playlist_data(playlist_name)
+                if playlist_data:
+                    # Get first date for this playlist
+                    playlist_df = self._all_songs_df[self._all_songs_df['playlist'] == playlist_name]
+                    if len(playlist_df) > 0:
+                        first_date = playlist_df['date_added'].sort_values(ascending=True).iloc[0]
+                        if str(first_date)[5:] == today:
+                            years_ago = int(str(self._today.date())[:4]) - int(str(first_date)[:4])
+                            
+                            # Create playlist link using ID if available
+                            if playlist_name == 'Liked Songs':
+                                # Special case for Liked Songs
+                                playlist_link = '<a href="/playlists/liked_songs">' + playlist_name + '</a>'
+                            elif playlist_name in self._playlist_dict:
+                                # Use playlist ID for regular playlists
+                                playlist_id = self._playlist_dict[playlist_name]
+                                playlist_link = f'<a href="/playlists/{playlist_id}">{playlist_name}</a>'
+                            else:
+                                # Fallback to name if no ID found
+                                playlist_link = playlist_name
+                            
+                            first_times.append(
+                                'You created the playlist ' + playlist_link + ' ' + str(years_ago) + ' years ago today!')
 
         self._first_times = first_times
         
@@ -3043,17 +3316,65 @@ class Top50Page():
         x_data = FEATURE_COLS
         y_data = []
 
-        dicty = defaultdict(list)
-        artists = self._top_artists[time_range]
-        pops = self._top_artists_pop[time_range]
-        for a,p in zip(artists, pops):
-            dicty['popularity'].append(p/100)
-
-        y_data = list(dicty.values())
+        # Get the rank column for this time range
+        rank_col = 'artists_' + TIME_RANGE_DICT[time_range][1]
+        
+        # Filter DataFrame to only include songs by top 50 artists
+        mask = self._unique_songs_df[rank_col].apply(lambda x: type(x) == int)
+        df = self._unique_songs_df[mask]
+        
+        # Safety check: if no songs found, create empty DataFrame with expected columns
+        if len(df) == 0:
+            df = pd.DataFrame(columns=self._unique_songs_df.columns)
+        
+        # Group by artist and calculate median for each feature
+        artist_features = {}
+        for feature in FEATURE_COLS:
+            if feature == 'popularity':
+                # For popularity, use the top_artists_pop data (already normalized to 0-1)
+                artist_features[feature] = [p/100 for p in self._top_artists_pop[time_range]]
+            else:
+                # For other features, calculate median across all songs by each artist
+                feature_medians = []
+                for artist in self._top_artists[time_range]:
+                    # Find all songs by this artist
+                    artist_mask = df['artist'].apply(lambda x: artist in x.split(', '))
+                    artist_songs = df[artist_mask]
+                    
+                    if len(artist_songs) > 0 and feature in artist_songs.columns:
+                        # Filter out NaN values before calculating median
+                        feature_values = artist_songs[feature].dropna()
+                        if len(feature_values) > 0:
+                            median_val = feature_values.median()
+                            feature_medians.append(median_val)
+                        else:
+                            # If all values are NaN, use 0
+                            feature_medians.append(0.0)
+                    else:
+                        # If no songs found or feature missing, use 0
+                        feature_medians.append(0.0)
+                
+                artist_features[feature] = feature_medians
+        
+        # Convert to list format expected by _boxplot
+        y_data = [artist_features[feature] for feature in FEATURE_COLS]
+        
+        # Validation: ensure all feature lists have the same length
+        expected_length = len(self._top_artists[time_range])
+        for feature in FEATURE_COLS:
+            if len(artist_features[feature]) != expected_length:
+                # Pad with zeros if missing values
+                while len(artist_features[feature]) < expected_length:
+                    artist_features[feature].append(0.0)
+                # Truncate if too many values
+                artist_features[feature] = artist_features[feature][:expected_length]
+        
+        # Rebuild y_data with validated lengths
+        y_data = [artist_features[feature] for feature in FEATURE_COLS]
 
         title = 'Top 50 Artists (' + \
             TIME_RANGE_DICT[time_range][0] + ') Median Audio Features'
-        text = [a + '<br>Rank: ' + str(i) for i, a in enumerate(artists, 1)]
+        text = [a + '<br>Rank: ' + str(i) for i, a in enumerate(self._top_artists[time_range], 1)]
         xaxis = 'Song Feature'
         yaxis = 'Level (Low -> High)'
 
@@ -3118,7 +3439,7 @@ class Top50Page():
 
     def graph_all_by_time_range(self):
         labels = [i[0] for i in TIME_RANGE_DICT.values()]
-        fig = subplots.make_subplots(rows=4, cols=1, vertical_spacing=.05,
+        fig = subplots.make_subplots(rows=4, cols=1, vertical_spacing=.08,
                                      subplot_titles=('<b>Top 50 Songs\' Features</b>', '<b>Top 50 Artists\' Median Song Features</b>',
                                                      '<b>Top 10 Song Genres & Top 5 Songs Per Genre</b>', '<b>Top 10 Artist Genres & Top 5 Artists Per Genre</b>'))
 
@@ -3162,7 +3483,7 @@ class Top50Page():
             # True False False for 1st False True False for 2nd False False True for 3rd
             visibility = [i == j for j in range(len(labels))]
             # 8 Feature Cols + 8 Feature Cols + 1 Bar Chart + 1 Bar Chart
-            visibility = [k for j in [[i]*4 for i in visibility]
+            visibility = [k for j in [[i]*18 for i in visibility]
                           for k in j] + [False]*12
             button = dict(
                 method='update',
@@ -3175,7 +3496,7 @@ class Top50Page():
         allButton = dict(
             method='update',
             label='All',
-            args=[{'visible': [False]*12+[True]*12},
+            args=[{'visible': [False]*54+[True]*12},
                   {'boxmode': 'group', 'showlegend': True}]
         )
         buttons += [allButton]
@@ -3206,13 +3527,13 @@ class Top50Page():
 
         # Only show 1st 18 Traces on page-load
         Ld = len(fig.data)
-        num = 4
+        num = 18
         for k in range(num, Ld):
             fig.update_traces(visible=False, selector=k)
 
         # edit axis labels
-        fig['layout']['xaxis']['title'] = 'Song Features'
-        fig['layout']['xaxis2']['title'] = 'Artist Features'
+        fig['layout']['xaxis']['title'] = 'Audio Features'
+        fig['layout']['xaxis2']['title'] = 'Audio Features'
         fig['layout']['xaxis3']['title'] = '% of Top 50 Songs'
         fig['layout']['xaxis4']['title'] = '% of Top 50 Artists'
 
@@ -3987,59 +4308,140 @@ class SingleSongPage():
         return shared_graph_top_rank_table(self._song_df)
 
     def graph_song_features_vs_avg(self):
+        """
+        Create a vertical bar graph comparing audio features across different data sources.
+        Features: all playlists median, artist median, and song's actual values.
+        """
         UNIQUE_SONGS_DF = self._unique_songs_df
         ALL_SONGS_DF = self._all_songs_df
 
-        artist_dfs = [UNIQUE_SONGS_DF[UNIQUE_SONGS_DF['artist'].apply(lambda x: i in x)]
-                            [FEATURE_COLS] for i in self._artist.split(', ')]
-        avg_df = UNIQUE_SONGS_DF[FEATURE_COLS]
-        dfs = [avg_df, self._song_df[FEATURE_COLS]]
+        # Get the specific song data
+        song_df = UNIQUE_SONGS_DF[UNIQUE_SONGS_DF['name'] == self._song]
+        song_df = song_df[song_df['artist'] == self._artist]
 
-        for df in dfs:
-            df['popularity'] = df['popularity']/100
-        dfs = [df.median(axis=0) for df in dfs]
+        if len(song_df) == 0:
+            return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Song not found in dataset</div>')
 
-        for df in artist_dfs:
-            df['popularity'] = df['popularity']/100
-        artist_dfs = [df.median(axis=0) for df in artist_dfs]
+        # Filter for available feature columns
+        available_feature_cols = []
+        for col in FEATURE_COLS:
+            if col in song_df.columns and not song_df[col].isna().all():
+                available_feature_cols.append(col)
+        
+        if not available_feature_cols:
+            return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">No audio features data available for this song</div>')
 
-        # add song values to last so features and percentiles avgs match colors
-        song_vals = dfs[-1]
-        dfs = dfs[:-1]
-        dfs += artist_dfs
-        dfs.append(song_vals)
+        # Get song's actual values
+        song_values = song_df[available_feature_cols].iloc[0]
 
-        names = ['All Playlists'] + self._artist.split(', ') + [self._song]
-        title = 'Song Audio Features vs. Median Song from All Playlists & Artist'
+        # Get all playlists median
+        all_playlists_median = UNIQUE_SONGS_DF[available_feature_cols].median()
 
+        # Get artist median for each artist in the comma-separated list
+        artist_medians = []
+        for artist_name in self._artist.split(', '):
+            artist_df = UNIQUE_SONGS_DF[UNIQUE_SONGS_DF['artist'].apply(lambda x: artist_name in x)]
+            if len(artist_df) > 0:
+                artist_median = artist_df[available_feature_cols].median()
+                artist_medians.append((artist_name, artist_median))
+
+        # Prepare data for plotting
         data = []
-        for name, df in zip(names, dfs):
-            # Round the values for display in text
-            if len(FEATURE_COLS) == 1:
-                # Single column case - df.iloc[0] is a single value
-                rounded_values = [round(df.iloc[0], 2)]
+        names = []
+        
+        # Add all playlists median
+        data.append(all_playlists_median)
+        names.append('All Playlists')
+        
+        # Add artist medians
+        for artist_name, artist_median in artist_medians:
+            data.append(artist_median)
+            names.append(artist_name)
+        
+        # Add song's actual values
+        data.append(song_values)
+        names.append(self._song)
+
+        # Normalize popularity to 0-1 scale
+        for i, df in enumerate(data):
+            if 'popularity' in df.index:
+                data[i]['popularity'] = round(df['popularity'] / 100, 2)
+
+        # Create the bar chart
+        fig = go.Figure()
+        
+        for i, (name, values) in enumerate(zip(names, data)):
+            # Convert to list and handle any NaN values
+            y_values = []
+            text_values = []
+            for col in available_feature_cols:
+                val = values[col]
+                if pd.isna(val):
+                    y_values.append(0)
+                    text_values.append('N/A')
             else:
-                # Multiple columns case - df.iloc[0] is a list
-                rounded_values = [round(val, 2) for val in df.iloc[0]]
-            data.append(go.Bar(name=name, x=FEATURE_COLS, y=[df.iloc[0]], text=rounded_values, textposition='auto'))
-        fig = go.Figure(data=data)
-        fig.update_layout(barmode='group', title_text=title)
+                    y_values.append(round(val, 3))
+                    text_values.append(round(val, 3))
+            
+            fig.add_trace(go.Bar(
+                name=name,
+                x=available_feature_cols,
+                y=y_values,
+                text=text_values,
+                textposition='auto',
+                hovertemplate='<b>%{fullData.name}</b><br>' +
+                            'Feature: %{x}<br>' +
+                            'Value: %{y}<br>' +
+                            '<extra></extra>'
+            ))
+
+        # Update layout
+        fig.update_layout(
+            title='Song Audio Features vs. Medians',
+            xaxis_title='Audio Features',
+            yaxis_title='Feature Values',
+            barmode='group',
+            showlegend=True,
+            height=500
+        )
+
         return Markup(fig.to_html(full_html=False))
 
     def graph_song_percentiles_vs_avg(self):
+        """
+        Create percentile comparison graph for song audio features.
+        
+        Improvements made:
+        - NaN values are filtered out before percentile calculation
+        - Playlist percentiles use method='max' for consistent ranking
+        - Artist percentiles use method='min' to avoid 100th percentile for single songs
+        - Single song cases are set to 0 (since 0% of songs are below them)
+        - Consistent data filtering and validation across all percentile calculations
+        """
         UNIQUE_SONGS_DF = self._unique_songs_df
+        ALL_SONGS_DF = self._all_songs_df
 
         artist_dfs = []
         for a in self._artist.split(', '):
             mask = UNIQUE_SONGS_DF['artist'].apply(lambda x: a in x.split(', '))
             artist_df = UNIQUE_SONGS_DF[mask]
             for col in PERCENTILE_COLS:
-                sz = artist_df[col].size-1
-                if sz > 0:
-                    artist_df[col + '_percentile'] = artist_df[col].rank(
-                        method='max').apply(lambda x: 100.0*(x-1)/sz)
+                if col in artist_df.columns and not artist_df[col].isna().all():
+                    # Filter out NaN values before calculating percentiles
+                    valid_data = artist_df[col].dropna()
+                    if len(valid_data) > 0:
+                        sz = valid_data.size - 1
+                        if sz > 0:
+                            # Use method='min' for artist percentiles to avoid 100th percentile for single songs
+                            artist_df[col + '_percentile'] = valid_data.rank(
+                                method='min').apply(lambda x: round(100.0*(x-1)/sz, 2))
+                        else:
+                            # Single song case - set to 0 (since 0% of songs are below them)
+                            artist_df[col + '_percentile'] = 0.0
+                    else:
+                        artist_df[col + '_percentile'] = 0.0
                 else:
-                    artist_df[col + '_percentile'] = [0]
+                    artist_df[col + '_percentile'] = 0.0
             artist_df = artist_df[artist_df['name'] == self._song]
             if len(artist_df.index) == 0:
                 return None
@@ -4049,7 +4451,17 @@ class SingleSongPage():
         avg_df = UNIQUE_SONGS_DF[UNIQUE_SONGS_DF['name'] == self._song]
         avg_df = avg_df[avg_df['artist'] == self._artist]
 
-        cols = [i + '_percentile' for i in PERCENTILE_COLS]
+        # Filter for available percentile columns (only show features that have data)
+        available_percentile_cols = []
+        for col in PERCENTILE_COLS:
+            percentile_col = col + '_percentile'
+            if percentile_col in avg_df.columns and not avg_df[percentile_col].isna().all():
+                available_percentile_cols.append(percentile_col)
+        
+        if not available_percentile_cols:
+            return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">No audio features data available for this song</div>')
+        
+        cols = available_percentile_cols
 
         dfs = {}
         dfs['All Playlists'] = avg_df[cols]
@@ -4057,8 +4469,37 @@ class SingleSongPage():
             dfs[i] = j
 
         data = []
+        # Create x-axis labels from the available percentile columns (remove '_percentile' suffix)
+        x_labels = [col.replace('_percentile', '') for col in available_percentile_cols]
+        
         for name, df in dfs.items():
-            data.append(go.Bar(name=name, x=PERCENTILE_COLS, y=df.iloc[0], text=df.iloc[0].astype(int), textposition='auto'))
+            # Handle NaN values safely when converting to text
+            y_values = df.iloc[0]
+            text_values = []
+            hover_values = []
+            for val in y_values:
+                if pd.isna(val):
+                    text_values.append('N/A')
+                    hover_values.append('N/A')
+                else:
+                    # Convert to integer for bar display (no decimals)
+                    bar_val = int(round(val, 0))
+                    text_values.append(bar_val)
+                    # Keep 2 decimal places for hover text (precision)
+                    hover_val = round(val, 2)
+                    hover_values.append(hover_val)
+            
+            data.append(go.Bar(
+                name=name, 
+                x=x_labels, 
+                y=y_values, 
+                text=text_values, 
+                textposition='auto',
+                hovertemplate='<b>%{fullData.name}</b><br>' +
+                             'Feature: %{x}<br>' +
+                             'Percentile: %{customdata}<extra></extra>',
+                customdata=hover_values
+            ))
 
         fig = go.Figure(data=data)
 
@@ -4296,39 +4737,37 @@ class SingleSongPage():
 
 # My Playlists Page ----------------------------------------------------------------------------------------------
 
-class MyPlaylistsPage():
+class MyPlaylistsPage(OptimizedPageBase):
     def __init__(self, path, all_songs_df, top_artists, top_songs):
-        self._path = path
-        self._all_songs_df = pd.DataFrame(all_songs_df)
-
+        # Initialize parent class with optimizations
+        super().__init__(path, all_songs_df, pd.DataFrame())  # unique_songs_df not needed for this page
+        
         self._top_artists = top_artists
         self._top_songs = top_songs
 
-        # Precompute page fragments in-memory
-        self._playlists_by_length = self._graph_playlists_by_length()
-        self._avg_boxplot = self._graph_playlists_avg_features_boxplot()
-        self._first_last_added = self._graph_playlists_first_last_added()
-        self._top_playlists_by_songs = self._graph_top_playlists_by_top_50_songs()
-        self._top_playlists_by_artists = self._graph_top_playlists_by_top_artists()
-        self._playlists_by_explicit = self._graph_playlists_by_explicit()
+        # Progressive loading: Don't precompute all components upfront
+        # Components will be loaded on-demand when requested
 
     def load_playlists_by_length(self):
-        return self._playlists_by_length
+        return self.load_component_progressively('playlists_by_length', self._graph_playlists_by_length)
+    
+    def load_popularity_histogram(self):
+        return self.load_component_progressively('popularity_histogram', self._graph_popularity_histogram)
     
     def load_avg_boxplot(self):
-        return self._avg_boxplot
+        return self.load_component_progressively('avg_boxplot', self._graph_playlists_avg_features_boxplot)
     
     def load_first_last_added(self):
-        return self._first_last_added
+        return self.load_component_progressively('first_last_added', self._graph_playlists_first_last_added)
     
     def load_playlists_by_artists(self):
-        return self._top_playlists_by_artists
+        return self.load_component_progressively('top_playlists_by_artists', self._graph_top_playlists_by_top_artists)
 
     def load_playlists_by_songs(self):
-        return self._top_playlists_by_songs
+        return self.load_component_progressively('top_playlists_by_songs', self._graph_top_playlists_by_top_50_songs)
 
     def load_playlists_by_explicit(self):
-        return self._playlists_by_explicit
+        return self.load_component_progressively('playlists_by_explicit', self._graph_playlists_by_explicit)
 
     def _graph_playlists_by_length(self):
         labels = ['# Songs', 'Duration (Hours)']
@@ -4344,14 +4783,24 @@ class MyPlaylistsPage():
         
 
     def _graph_num_songs_histogram(self):
-        df = self._all_songs_df['playlist'].value_counts().reset_index()
+        # Use pre-computed playlist counts for better performance
+        if hasattr(self, '_playlist_counts'):
+            df = self._playlist_counts.reset_index()
+        else:
+            df = self._all_songs_df['playlist'].value_counts().reset_index()
+        
         fig = px.histogram(df, title="Playlists by # of Songs", marginal="rug",
                        hover_data='playlist')
 
         return fig
 
     def _graph_duration_histogram(self):
-        df = self._all_songs_df.groupby('playlist')['duration'].sum().reset_index()
+        # Use pre-computed playlist durations for better performance
+        if hasattr(self, '_playlist_durations'):
+            df = self._playlist_durations.reset_index()
+        else:
+            df = self._all_songs_df.groupby('playlist')['duration'].sum().reset_index()
+        
         df['duration'] = round(df['duration'] / 60 / 60, 2)
         fig = px.histogram(df, title="Playlists by Duration (Hours)", marginal="rug",
                         hover_data='playlist')
@@ -4371,13 +4820,33 @@ class MyPlaylistsPage():
         
 
     def _graph_num_explicit(self, percent=False):
+        # Use pre-computed explicit content data for better performance
         if percent:
-            df = self._all_songs_df.groupby('playlist')['explicit'].mean().reset_index()
+            if hasattr(self, '_playlist_explicit_percentages'):
+                df = self._playlist_explicit_percentages.reset_index()
+            else:
+                df = self._all_songs_df.groupby('playlist')['explicit'].mean().reset_index()
             df['explicit'] = round(df['explicit'], 2)
         else:
-            df = self._all_songs_df.groupby('playlist')['explicit'].sum().reset_index()
+            if hasattr(self, '_playlist_explicit_counts'):
+                df = self._playlist_explicit_counts.reset_index()
+            else:
+                df = self._all_songs_df.groupby('playlist')['explicit'].sum().reset_index()
+        
         fig = px.histogram(df, marginal="rug", hover_data='playlist')
         return fig
+
+    def _graph_popularity_histogram(self):
+        labels = ['Average Popularity', 'Median Popularity']
+        avg_popularity = self._graph_avg_popularity_histogram()
+        median_popularity = self._graph_median_popularity_histogram()
+
+        fig = _make_single_subplot(labels, [avg_popularity, median_popularity],
+                                   'Popularity',
+                                   '# Playlists',
+                                   'Playlists by Average and Median Song Popularity', 2)
+
+        return Markup(fig.to_html(full_html=False))
 
     def _graph_avg_popularity_histogram(self):
         df = self._all_songs_df.groupby('playlist')['popularity'].mean().reset_index()
@@ -4392,16 +4861,97 @@ class MyPlaylistsPage():
         return fig
 
     def _graph_playlists_avg_features_boxplot(self):
-        labels = ['Average', 'Median']
-        avg = self._graph_avg_popularity_histogram()
-        median = self._graph_median_popularity_histogram()
+        try:
+            # Filter for available FEATURE_COLS only (columns that exist and have non-null values)
+            available_feature_cols = [col for col in FEATURE_COLS if col in self._all_songs_df.columns]
+            
+            if not available_feature_cols:
+                # Fallback to basic features if no audio features available
+                available_feature_cols = ['popularity', 'duration']
+            
+            # Handle playlist column - it contains lists, so we need to explode it first
+            # Create a copy of the DataFrame and explode the playlist column
+            working_df = self._all_songs_df.copy()
+            working_df = working_df.explode('playlist')
+            
+            # Now use groupby on the exploded DataFrame
+            df = working_df.groupby('playlist')[available_feature_cols].median().reset_index()
 
-        fig = _make_single_subplot(labels, [avg, median],
-                                   'Popularity',
-                                   '# Playlists',
-                                   'Playlists by Popularity', 2)
+            x_data = available_feature_cols
+            y_data = []
 
-        return Markup(fig.to_html(full_html=False))
+            # Normalize popularity to 0-1 scale if it exists
+            if 'popularity' in df.columns:
+                df['popularity'] = df['popularity']/100
+            
+            # Prepare y_data - each feature gets a list of median values from all playlists
+            y_data = [df[col] for col in available_feature_cols]
+
+            # Create feature-specific hover text for each trace
+            hover_text = []
+            for feature_idx, feature_name in enumerate(available_feature_cols):
+                feature_hover_text = []
+                
+                for _, row in df.iterrows():
+                    playlist_name = row['playlist']
+                    
+                    # Get the original songs for this playlist to calculate coverage
+                    playlist_songs = working_df[working_df['playlist'] == playlist_name]
+                    
+                    # Count UNIQUE songs (not exploded rows)
+                    unique_song_ids = playlist_songs['id'].unique()
+                    total_songs = len(unique_song_ids)
+                    
+                    # Count songs with THIS SPECIFIC audio feature
+                    songs_with_this_feature = 0
+                    
+                    for song_id in unique_song_ids:
+                        song_rows = playlist_songs[playlist_songs['id'] == song_id]
+                        if feature_name in song_rows.columns and song_rows[feature_name].notna().any():
+                            songs_with_this_feature += 1
+                    
+                    # Calculate percentage of songs with this specific feature
+                    coverage_pct = (songs_with_this_feature / total_songs * 100) if total_songs > 0 else 0
+                    
+                    # Create hover text with exactly 4 rows for this specific feature
+                    hover_line = f"<b>{playlist_name}</b><br>"
+                    hover_line += f"Total Songs: {total_songs}<br>"
+                    hover_line += f"Songs with {feature_name.title()}: {songs_with_this_feature}<br>"
+                    hover_line += f"% of Songs with {feature_name.title()}: {coverage_pct:.1f}%"
+                    
+                    feature_hover_text.append(hover_line.strip())
+                
+                hover_text.append(feature_hover_text)
+
+            title = 'My Playlists\' Median Audio Features'
+            xaxis = 'Song Feature'
+            yaxis = 'Level (Low -> High)'
+            
+            # Create the boxplot manually since _boxplot doesn't support per-trace hovertext
+            fig = go.Figure()
+            
+            for i, (feature_name, feature_data) in enumerate(zip(available_feature_cols, y_data)):
+                fig.add_trace(go.Box(
+                    y=feature_data,
+                    name=feature_name,
+                    boxpoints='all',
+                    text=hover_text[i],  # Use the specific hovertext for this feature
+                    marker_color=COLORS[i % len(COLORS)]
+                ))
+            
+            fig.update_layout(
+                title_text=title,
+                xaxis_title=xaxis,
+                yaxis_title=yaxis
+            )
+            
+            return Markup(fig.to_html(full_html=False))
+        
+            return fig
+        except Exception as e:
+            # Fallback to a simple error message if the boxplot fails
+            error_html = f'<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Error generating audio features boxplot: {str(e)}</div>'
+            return Markup(error_html)
 
     def _graph_playlists_first_last_added(self):
         df = self._all_songs_df.groupby('playlist')['date_added'].agg([('CreatedDate', 'min'), ('LastAddedDate', 'max')]).reset_index()

@@ -3,7 +3,6 @@
 
 # -------------------------------Imports-----------------------------------------------
 
-import pickle
 import pandas as pd
 from visualization import CurrentlyPlayingPage, AnalyzePlaylistsPage, AnalyzePlaylistPage,AnalyzeArtistPage, AnalyzeArtistsPage, SingleSongPage, MyPlaylistsPage
 from SetupData import SetupData
@@ -14,9 +13,13 @@ import uuid
 import shutil
 import tempfile
 import traceback
+import time
 import json
 import threading
 import base64
+
+# Global lock for progress data access
+progress_lock = threading.Lock()
 import hashlib
 import hmac
 from flask_caching import Cache
@@ -88,6 +91,18 @@ def before_request():
                     return redirect('/login')
 
 # -------------------------------Authentication Helpers-----------------------------------------------
+
+def login_required(f):
+    """Decorator to require authentication for routes."""
+    from functools import wraps
+    
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        user = get_current_user()
+        if not user:
+            return redirect('/login')
+        return f(*args, **kwargs)
+    return decorated_function
 
 def refresh_user_token(refresh_token):
     """Refresh user's access token using refresh token."""
@@ -274,6 +289,7 @@ def login():
 
 # New polling-based setup routes for PythonAnywhere compatibility
 @app.route('/start_setup_1', methods=['GET', 'POST'])
+@login_required
 def start_setup_1():
     """Start setup 1 in background thread and return progress ID"""
     user = get_current_user()
@@ -285,25 +301,26 @@ def start_setup_1():
     if not os.path.exists(user_path):
         os.makedirs(user_path)
     
-    # Check if setup data exists (JSON)
-    setup_json = f'{user_path}setup_data.json'
-    if not os.path.exists(setup_json):
-        return jsonify({'error': 'Setup data not found'}), 400
+    # Check if user metadata exists (JSON) - consolidated file
+    user_meta_json = f'{user_path}user_meta.json'
+    if not os.path.exists(user_meta_json):
+        return jsonify({'error': 'User metadata not found'}), 400
     
-    # Load setup data
-    with open(setup_json, 'r', encoding='utf-8') as f:
-        setup_data = json.load(f)
+    # Load user metadata
+    with open(user_meta_json, 'r', encoding='utf-8') as f:
+        user_meta = json.load(f)
     
-    playlist_dict = setup_data['playlist_dict']
+    playlist_dict = user_meta['playlist_dict']
     
     progress_id = str(uuid.uuid4())
     progress_data[progress_id] = {
         'status': 'running',
         'messages': [],
         'current_step': 0,
-        'total_steps': len(playlist_dict) + 1,  # +1 for liked songs
+        'total_steps': len(playlist_dict),  # don't include liked songs
         'complete': False,
-        'error': None
+        'error': None,
+        'setup_type': 'setup1'  # Mark this as Setup 1
     }
     
     def run_setup_1():
@@ -343,8 +360,8 @@ def start_setup_1():
             
             # Collect liked songs if we haven't hit the limit and haven't been cancelled
             if len(ALL_SONGS_DF) <= 8888 and progress_data[progress_id]['status'] != 'cancelled':
-                progress_data[progress_id]['current_step'] = len(playlist_dict) + 1
-                progress_data[progress_id]['messages'].append('Collecting Liked Songs...')
+                progress_data[progress_id]['current_step'] = len(playlist_dict)
+                progress_data[progress_id]['messages'].append('PROGRESS: Collecting Liked Songs...')
                 
                 try:
                     liked_df = temp_setup._get_liked_songs()
@@ -356,7 +373,7 @@ def start_setup_1():
                     # Add liked songs to main dataframe
                     if not liked_df.empty:
                         ALL_SONGS_DF = pd.concat([ALL_SONGS_DF, liked_df])
-                        progress_data[progress_id]['messages'].append(f'Liked Songs --> {progress_data[progress_id]["current_step"]}/{progress_data[progress_id]["total_steps"]}')
+                        progress_data[progress_id]['messages'].append(f'Finished Getting Liked Songs!')
                     else:
                         progress_data[progress_id]['messages'].append('No liked songs found')
                         
@@ -368,10 +385,13 @@ def start_setup_1():
             if not ALL_SONGS_DF.empty:
                 if 'index' in ALL_SONGS_DF.columns:
                     ALL_SONGS_DF.drop(columns='index', inplace=True)
+                
+                progress_data[progress_id]['messages'].append('PROGRESS: Saving All Songs...')
                 ALL_SONGS_DF.to_json(f"{user_path}all_songs.ndjson.gz", orient='records', lines=True, compression='gzip')
+                progress_data[progress_id]['messages'].append('All songs data saved successfully!')
                 
                 # Update status (JSON)
-                status = {'SETUP1': True, 'SETUP2': False, 'SETUP3': False}
+                status = {'setup1': True, 'setup2': False, 'setup3': False}
                 with open(f'{user_path}setup_status.json', 'w', encoding='utf-8') as f:
                     json.dump(status, f)
                 
@@ -392,91 +412,296 @@ def start_setup_1():
     return jsonify({'progress_id': progress_id})
 
 @app.route('/start_setup_2', methods=['GET', 'POST'])
+@login_required
 def start_setup_2():
-    """Start setup 2 in background thread and return progress ID"""
+    """Start setup 2 (audio features) in background thread and return progress ID"""
     user = get_current_user()
     if not user:
         return jsonify({'error': 'Not authenticated'}), 401
     
     user_path = f'.data/{user["id"]}/'
-    all_songs_df_file = f'{user_path}all_songs.ndjson.gz'
     
-    if not os.path.exists(all_songs_df_file):
+    # Check if setup 1 is completed
+    try:
+        with open(f'{user_path}setup_status.json', 'r') as f:
+            status = json.load(f)
+        if not status.get('setup1'):
+            return jsonify({'error': 'Setup 1 not completed'}), 400
+    except FileNotFoundError:
         return jsonify({'error': 'Setup 1 not completed'}), 400
-    
-    all_songs_df = pd.read_json(all_songs_df_file, lines=True, compression='gzip')
     
     progress_id = str(uuid.uuid4())
     progress_data[progress_id] = {
         'status': 'running',
         'messages': [],
         'current_step': 0,
-        'total_steps': 11,
+        'total_steps': 6,  # More granular steps
         'complete': False,
-        'error': None
+        'error': None,
+        'setup_type': 'setup2',  # Mark this as Setup 2
+        # Enhanced progress tracking for Setup 2
+        'matched_count': 0,
+        'total_songs': 0,
+        'matched_percentage': 0,
+        'searching_count': 0,
+        'searching_percentage': 0,
+        'current_batch': 0,
+        'total_batches': 0,
+        'batch_percentage': 0,
+        'songs_with_features': 0,
+        'features_percentage': 0
     }
     
     def run_setup_2():
         try:
             # Create a new SetupData instance for this thread
             temp_session = {'SPOTIFY': user['spotify_client']}
+            
+            # Test Spotify client before creating SetupData
+            try:
+                test_user = user['spotify_client'].me()
+                if not test_user or 'id' not in test_user:
+                    raise Exception("Spotify client authentication failed - no user ID returned")
+            except Exception as spotify_error:
+                progress_data[progress_id]['error'] = f"Spotify authentication error: {str(spotify_error)}"
+                progress_data[progress_id]['status'] = 'error'
+                return
+            
             temp_setup = SetupData(temp_session)
             
-            steps = [
-                ('Getting Unique Songs...', lambda: temp_setup._get_unique_songs_df()),
-                ('Getting Top Artists...', lambda: temp_setup._get_top_artists()),
-                ('Getting Top Songs...', lambda: temp_setup._get_top_songs()),
-                ('Adding Top Artists Rank...', lambda: temp_setup._add_top_artists_rank()),
-                ('Adding Top Songs Rank...', lambda: temp_setup._add_top_songs_rank()),
-                ('Getting Artist Genres...', lambda: temp_setup._add_genres()),
-                ('Setting Up Home Page...', lambda: None),  # Will be handled separately
-                ('Setting Up About Me Page...', lambda: None),  # Will be handled separately
-                ('Setting Up Top50 Page...', lambda: None),  # Will be handled separately
-                ('Setting Up My Playlists Page...', lambda: None),  # Will be handled separately
-                ('Finalizing Data Collection...', lambda: None)  # Will be handled separately
-            ]
-            
-            for i, (message, func) in enumerate(steps):
-                if progress_data[progress_id]['status'] == 'cancelled':
-                    break
+            # Run setup 2 generator and capture messages
+            for message in temp_setup.setup_2():
+                if message.startswith('data:'):
+                    clean_message = message[5:].replace('<br>\n\n\n', '').replace('<br/>\n\n\n', '')
+
                     
-                progress_data[progress_id]['current_step'] = i + 1
-                progress_data[progress_id]['messages'].append(f'{message}{i + 1}/{len(steps)}')
-                
-                # Execute the function
-                if func:
-                    func()
-                
-                # Simulate some processing time
-                import time
-                time.sleep(0.2)
+                    # Extract enhanced progress information
+                    if 'Features applied to your songs:' in message:
+                        try:
+                            # Extract matched count from message like "Features applied to your songs: 150"
+                            matched_text = message.split('Features applied to your songs: ')[1].split('<br>')[0]
+                            progress_data[progress_id]['matched_count'] = int(matched_text)
+                        except:
+                            pass
+                    
+                    elif 'Songs still needing API calls:' in message:
+                        try:
+                            # Extract searching count from message like "Songs still needing API calls: 50"
+                            searching_text = message.split('Songs still needing API calls: ')[1].split('<br>')[0]
+                            progress_data[progress_id]['searching_count'] = int(searching_text)
+                        except:
+                            pass
+                    
+                    elif 'Total songs in your library:' in message:
+                        try:
+                            # Extract total songs count from message like "Total songs in your library: 200"
+                            total_text = message.split('Total songs in your library: ')[1].split('<br>')[0]
+                            progress_data[progress_id]['total_songs'] = int(total_text)
+                        except:
+                            pass
+                    
+                    elif 'Processing audio features batch' in message:
+                        try:
+                            # Extract batch information from message like "Processing audio features batch 3/10 (81-120 of 200 songs)..."
+                            batch_part = message.split('batch ')[1].split(' (')[0]
+                            batch_num, total_batches = batch_part.split('/')
+                            progress_data[progress_id]['current_batch'] = int(batch_num)
+                            progress_data[progress_id]['total_batches'] = int(total_batches)
+                            progress_data[progress_id]['batch_percentage'] = (int(batch_num) / int(total_batches)) * 100
+                            
+                            # Update songs_with_features count (matched + processed so far)
+                            if progress_data[progress_id]['matched_count'] > 0:
+                                # Estimate: matched + (current_batch-1) * batch_size
+                                batch_size = 40  # Default batch size
+                                estimated_processed = progress_data[progress_id]['matched_count'] + ((int(batch_num) - 1) * batch_size)
+                                progress_data[progress_id]['songs_with_features'] = min(estimated_processed, progress_data[progress_id]['total_songs'])
+                        except:
+                            pass
+                    
+                    # Pass through all progress messages from setup2
+                    progress_data[progress_id]['messages'].append(clean_message)
+                    
+                    # Update current step based on progress
+                    with progress_lock:
+                        current_step = progress_data[progress_id]['current_step']
+                        
+                        # Updated to match new SetupData.py format with step numbers
+                        if '1/6 Getting Your Unique Songs' in message:
+                            progress_data[progress_id]['current_step'] = max(current_step, 1)
+                        elif '2/6 Retrieving Audio Features Database' in message:
+                            progress_data[progress_id]['current_step'] = max(current_step, 2)
+                        elif '3/6 Matching' in message or '3. Matching' in message:
+                            progress_data[progress_id]['current_step'] = max(current_step, 3)
+                        elif '4/6 Getting' in message or ('4. Getting' in message and 'Songs' in message):
+                            progress_data[progress_id]['current_step'] = max(current_step, 4)
+                        elif '5/6 Calculating Overall Percentiles' in message:
+                            progress_data[progress_id]['current_step'] = max(current_step, 5)
+                        elif '6/6 Caching Your Data' in message:
+                            progress_data[progress_id]['current_step'] = max(current_step, 6)
+                    
+                elif message.startswith('data:ERROR='):
+                    error_msg = message[11:].replace('<br>', '\n')
+                    progress_data[progress_id]['error'] = error_msg
+                    progress_data[progress_id]['status'] = 'error'
+                    return
             
-            # Page setup no longer writes pickled page objects; views compute on demand and cache via Flask-Caching
-            # Update status (JSON)
-            status = {'SETUP1': True, 'SETUP2': True, 'SETUP3': False}
-            with open(f'{user_path}setup_status.json', 'w', encoding='utf-8') as f:
-                json.dump(status, f)
-            
-            progress_data[progress_id]['status'] = 'complete'
             progress_data[progress_id]['complete'] = True
+            progress_data[progress_id]['status'] = 'complete'
             
         except Exception as e:
             progress_data[progress_id]['error'] = str(e)
             progress_data[progress_id]['status'] = 'error'
     
     thread = threading.Thread(target=run_setup_2)
+    thread.start()
+    
+    return jsonify({'progress_id': progress_id})
+
+@app.route('/start_setup_3', methods=['GET', 'POST'])
+@login_required
+def start_setup_3():
+    """Start setup 3 (data grouping) in background thread and return progress ID"""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    user_path = f'.data/{user["id"]}/'
+    
+    # Check if setup 2 is completed
+    try:
+        with open(f'{user_path}setup_status.json', 'r') as f:
+            status = json.load(f)
+        if not status.get('setup2'):
+            return jsonify({'error': 'Setup 2 not completed'}), 400
+    except FileNotFoundError:
+        return jsonify({'error': 'Setup 2 not completed'}), 400
+    
+    all_songs_df_file = f'{user_path}all_songs.ndjson.gz'
+    if not os.path.exists(all_songs_df_file):
+        return jsonify({'error': 'Data files not found'}), 400
+    
+    all_songs_df = pd.read_json(all_songs_df_file, lines=True, compression='gzip')
+    
+    # Check if Setup 3 is already running and clean up old progress data
+    with progress_lock:
+        existing_setup3 = None
+        old_progress_ids = []
+        current_time = time.time()
+        
+        for pid, data in progress_data.items():
+            if data.get('setup_type') == 'setup3':
+                if data.get('status') == 'running':
+                    existing_setup3 = pid
+                else:
+                    # Only clean up progress data older than 30 seconds
+                    if 'timestamp' in data and (current_time - data['timestamp']) > 30:
+                        old_progress_ids.append(pid)
+        
+        # Remove old progress data
+        for pid in old_progress_ids:
+            del progress_data[pid]
+        
+        if existing_setup3:
+            return jsonify({'progress_id': existing_setup3})
+    
+    with progress_lock:
+        progress_id = str(uuid.uuid4())
+        progress_data[progress_id] = {
+            'status': 'running',
+            'messages': [],
+            'current_step': 0,
+            'total_steps': 10,  # Setup 3 has 10 steps
+            'complete': False,
+            'error': None,
+            'setup_type': 'setup3',  # Mark this as Setup 3
+            'timestamp': time.time()  # Add timestamp for cleanup
+        }
+        
+
+    
+    def run_setup_3():
+        try:
+            # Create a new SetupData instance for this thread
+            temp_session = {'SPOTIFY': user['spotify_client']}
+            temp_setup = SetupData(temp_session)
+            
+            # Run setup 3 generator and capture messages
+            for message in temp_setup.setup_3(all_songs_df):
+                if message.startswith('data:'):
+                    clean_message = message[5:].replace('<br>\n\n\n', '').replace('<br/>\n\n\n', '')
+                    
+                    # Add all progress messages (reverted from success-only filtering)
+                    with progress_lock:
+                        progress_data[progress_id]['messages'].append(clean_message)
+
+                    
+                    # Update current step based on progress messages
+                    # Use max() to prevent step counter from going backwards
+                    with progress_lock:
+                        current_step = progress_data[progress_id]['current_step']
+                        
+                        # More flexible step detection that handles "..." endings
+                        if 'Step 1/10:' in message:
+                            progress_data[progress_id]['current_step'] = max(current_step, 1)
+                        elif 'Step 2/10:' in message:
+                            progress_data[progress_id]['current_step'] = max(current_step, 2)
+                        elif 'Step 3/10:' in message:
+                            progress_data[progress_id]['current_step'] = max(current_step, 3)
+                        elif 'Step 4/10:' in message:
+                            progress_data[progress_id]['current_step'] = max(current_step, 4)
+                        elif 'Step 5/10:' in message:
+                            progress_data[progress_id]['current_step'] = max(current_step, 5)
+                        elif 'Step 6/10:' in message:
+                            progress_data[progress_id]['current_step'] = max(current_step, 6)
+                        elif 'Step 7/10:' in message:
+                            progress_data[progress_id]['current_step'] = max(current_step, 7)
+                        elif 'Step 8/10:' in message:
+                            progress_data[progress_id]['current_step'] = max(current_step, 8)
+                        elif 'Step 9/10:' in message:
+                            progress_data[progress_id]['current_step'] = max(current_step, 9)
+                        elif 'Step 10/10:' in message:
+                            progress_data[progress_id]['current_step'] = max(current_step, 10)
+                    
+                elif message.startswith('data:ERROR='):
+                    error_msg = message[11:].replace('<br>', '\n')
+                    with progress_lock:
+                        progress_data[progress_id]['error'] = error_msg
+                        progress_data[progress_id]['status'] = 'error'
+                    return
+            
+            with progress_lock:
+                progress_data[progress_id]['complete'] = True
+                progress_data[progress_id]['status'] = 'complete'
+                progress_data[progress_id]['timestamp'] = time.time()  # Update timestamp on completion
+            
+        except Exception as e:
+            with progress_lock:
+                progress_data[progress_id]['error'] = str(e)
+                progress_data[progress_id]['status'] = 'error'
+                progress_data[progress_id]['timestamp'] = time.time()  # Update timestamp on error
+    
+    thread = threading.Thread(target=run_setup_3)
     thread.daemon = True
     thread.start()
     
     return jsonify({'progress_id': progress_id})
 
 @app.route('/get_progress/<progress_id>')
+@login_required
 def get_progress(progress_id):
     """Get progress for a specific setup operation"""
-    if progress_id not in progress_data:
-        return jsonify({'error': 'Progress ID not found'}), 404
-    
-    return jsonify(progress_data[progress_id])
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'Not authenticated'}), 401
+        
+    with progress_lock:
+        if progress_id not in progress_data:
+            return jsonify({'error': 'Progress ID not found'}), 404
+        
+        # Return a copy to avoid race conditions
+        progress_copy = progress_data[progress_id].copy()
+
+        return jsonify(progress_copy)
 
 # Login and Setup
 @app.route('/')
@@ -492,17 +717,13 @@ def index():
 	# User is authenticated - check setup status
 	user_path = f'.data/{user["id"]}/'
 
-	# Check if setup data exists; if not, run Setup 1 immediately and persist JSON
-	setup_json = f'{user_path}setup_data.json'
-	if not os.path.exists(setup_json):
+	# Check if user metadata exists; if not, run Setup 1 immediately and persist JSON
+	user_meta_json = f'{user_path}user_meta.json'
+	if not os.path.exists(user_meta_json):
 		try:
 			temp_session = {'SPOTIFY': user['spotify_client']}
 			temp_setup = SetupData(temp_session)
-			setup_data = {'user_id': user['id'], 'playlist_dict': temp_setup.PLAYLIST_DICT}
-			if not os.path.exists(user_path):
-				os.makedirs(user_path)
-			with open(setup_json, 'w', encoding='utf-8') as f:
-				json.dump(setup_data, f)
+			# The SetupData constructor now creates user_meta.json automatically
 		except Exception as e:
 			return f'<h3>Error setting up: {str(e)}</h3>'
 
@@ -512,26 +733,31 @@ def index():
 		# If Setup 1 artifact exists (NDJSON), mark and kick off setup 2
 		all_songs_path = f'{user_path}all_songs.ndjson.gz'
 		if os.path.exists(all_songs_path):
-			status = {'SETUP1': True, 'SETUP2': False, 'SETUP3': False}
+			status = {'setup1': True, 'setup2': False, 'setup3': False}
 			with open(collection_json, 'w', encoding='utf-8') as f:
 				json.dump(status, f)
 		else:
-			return render_template('setup.html', setup2="false")
+			return render_template('setup.html', 
+				setup1="false",
+				setup2="false", 
+				setup3="false")
 
 	with open(collection_json, 'r', encoding='utf-8') as f:
 		status = json.load(f)
 
-	# If SETUP1 done but SETUP2 not done, redirect to setup 2 page
-	if status.get('SETUP1') and not status.get('SETUP2'):
-		return render_template('setup.html', setup2="true")
-
-	# If SETUP2 is complete and artifacts exist, go home; otherwise, keep user on setup
+	# Check what setup step needs to be run and render template accordingly
 	all_songs_path = f'{user_path}all_songs.ndjson.gz'
 	unique_songs_path = f'{user_path}unique_songs.ndjson.gz'
-	if status.get('SETUP2') and os.path.exists(all_songs_path) and os.path.exists(unique_songs_path):
+	
+	# If all setup complete and artifacts exist, go home
+	if status.get('setup3') and os.path.exists(all_songs_path) and os.path.exists(unique_songs_path):
 		return redirect('/home')
-	else:
-		return render_template('setup.html', setup2="true" if status.get('SETUP1') else "false")
+	
+	# Otherwise, show setup page with current status
+	return render_template('setup.html', 
+		setup1="true" if status.get('setup1') else "false",
+		setup2="true" if status.get('setup2') else "false", 
+		setup3="true" if status.get('setup3') else "false")
 
 # Spotify OAuth callback
 @app.route('/callback')
@@ -608,7 +834,8 @@ def _cache_key_home():
 	return f"home:{uid}:{ready}"
 
 @app.route('/home')
-@cache.cached(timeout=300, key_prefix=_cache_key_home)
+@login_required
+@cache.cached(timeout=60, key_prefix=_cache_key_home)  # Reduced cache timeout for better performance
 def home():
 	user = get_current_user()
 	if not user:
@@ -622,15 +849,26 @@ def home():
 	if not os.path.exists(all_songs_path) or not os.path.exists(unique_songs_path):
 		return redirect('/')
 
+	# Quick check if setup is complete to avoid unnecessary processing
+	setup_status_path = f'{user_path}setup_status.json'
+	if os.path.exists(setup_status_path):
+		try:
+			with open(setup_status_path, 'r') as f:
+				setup_status = json.load(f)
+			if not setup_status.get('setup3', False):
+				return redirect('/')
+		except:
+			return redirect('/')
+
 	all_songs_df = pd.read_json(all_songs_path, lines=True, compression='gzip')
 	unique_songs_df = pd.read_json(unique_songs_path, lines=True, compression='gzip')
 
-	# Load setup data to get playlist_dict
-	with open(f'{user_path}setup_data.json', 'r', encoding='utf-8') as f:
-		setup_data = json.load(f)
-	playlist_dict = setup_data['playlist_dict']
+	# Load user metadata to get playlist_dict
+	with open(f'{user_path}user_meta.json', 'r', encoding='utf-8') as f:
+		user_meta = json.load(f)
+	playlist_dict = user_meta['playlist_dict']
 
-	# Build page artifacts in-memory (no pickles)
+	# Build page artifacts in-memory
 	from visualization import HomePage
 	home_page = HomePage(user_path, all_songs_df, unique_songs_df, playlist_dict)
 
@@ -647,6 +885,33 @@ def home():
 					   full_timeline=full_timeline,
 					   last_added_playlist=last_added_playlist,
 					   overall_data=overall_data, first_times=first_times)
+
+# Download Data as CSV
+@app.route('/download-data')
+@login_required
+def download_data():
+	user = get_current_user()
+	if not user:
+		return redirect('/')
+	
+	user_path = f'.data/{user["id"]}/'
+	
+	# Read unique songs data from filesystem (NDJSON, gzipped)
+	unique_songs_path = f'{user_path}unique_songs.ndjson.gz'
+	if not os.path.exists(unique_songs_path):
+		return redirect('/')
+
+	unique_songs_df = pd.read_json(unique_songs_path, lines=True, compression='gzip')
+	
+	# Convert DataFrame to CSV string
+	csv_data = unique_songs_df.to_csv(index=False)
+	
+	# Create response with CSV data
+	response = make_response(csv_data)
+	response.headers['Content-Type'] = 'text/csv'
+	response.headers['Content-Disposition'] = f'attachment; filename=spotify_unique_songs_{user["id"]}.csv'
+	
+	return response
 
 # Sign out
 @app.route('/sign-out')
@@ -687,6 +952,7 @@ def sign_out():
 
 # Currently Playing Page
 @app.route('/currently-playing')
+@login_required
 def currently_playing():
     user = get_current_user()
     if not user:
@@ -706,7 +972,7 @@ def currently_playing():
     all_songs_path = f'{user_path}all_songs.ndjson.gz'
     unique_songs_path = f'{user_path}unique_songs.ndjson.gz'
     if not os.path.exists(all_songs_path) or not os.path.exists(unique_songs_path):
-        return "<h3>Please complete setup first</h3>"
+        return redirect('/')
     
     # Load required data (NDJSON, gzipped)
     all_songs_df = pd.read_json(f'{user_path}all_songs.ndjson.gz', lines=True, compression='gzip')
@@ -770,6 +1036,7 @@ def currently_playing():
 
 # About Me Page
 @app.route('/about-me')
+@login_required
 @cache.cached(timeout=300)
 def about_me():
     user = get_current_user()
@@ -818,7 +1085,8 @@ def _cache_key_top50():
 	return f"top50:{uid}:{ready}:{mtime}"
 
 @app.route('/top-50')
-@cache.cached(timeout=300, key_prefix=_cache_key_top50)
+@login_required
+@cache.cached(timeout=60, key_prefix=_cache_key_top50)  # Reduced cache timeout for better performance
 def top_50():
     user = get_current_user()
     if not user:
@@ -828,6 +1096,17 @@ def top_50():
     unique_songs_path = f'{user_path}unique_songs.ndjson.gz'
     if not os.path.exists(unique_songs_path):
         return redirect('/')
+
+    # Quick check if setup is complete to avoid unnecessary processing
+    setup_status_path = f'{user_path}setup_status.json'
+    if os.path.exists(setup_status_path):
+        try:
+            with open(setup_status_path, 'r') as f:
+                setup_status = json.load(f)
+            if not setup_status.get('setup3', False):
+                return redirect('/')
+        except:
+            return redirect('/')
 
     unique_songs_df = pd.read_json(unique_songs_path, lines=True, compression='gzip')
 
@@ -851,6 +1130,7 @@ def top_50():
 
 # My Playlists Page
 @app.route('/my-playlists')
+@login_required
 @cache.cached(timeout=300)
 def my_playlists():
     user = get_current_user()
@@ -866,7 +1146,7 @@ def my_playlists():
     all_songs_df = pd.read_json(all_songs_path, lines=True, compression='gzip')
     unique_songs_df = pd.read_json(unique_songs_path, lines=True, compression='gzip')
 
-    # Load Top 50 lists (prefer JSON, fallback to pickle for backward compat)
+    # Load Top 50 lists from JSON
     try:
         with open(f'{user_path}top_artists.json', 'r', encoding='utf-8') as f:
             top_artists = json.load(f)
@@ -883,34 +1163,37 @@ def my_playlists():
 
     playlists_by_length = page.load_playlists_by_length()
     playlists_by_explicit = page.load_playlists_by_explicit()
-    avg_boxplot = page.load_avg_boxplot()
+    # popularity_histogram = page.load_popularity_histogram()
+    playlist_avg_features_boxplot = page.load_avg_boxplot()
     first_last_added = page.load_first_last_added()
     top_playlists_by_songs = page.load_playlists_by_songs()
     top_playlists_by_artists = page.load_playlists_by_artists()
 
     return render_template('my_playlists.html', playlists_by_length=playlists_by_length,
                            playlists_by_explicit=playlists_by_explicit,
-                           avg_boxplot=avg_boxplot,
+                           # popularity_histogram=popularity_histogram,
+                           playlist_avg_features_boxplot=playlist_avg_features_boxplot,
                            first_last_added=first_last_added,
                            top_playlists_by_songs=top_playlists_by_songs,
                            top_playlists_by_artists=top_playlists_by_artists)
 
 # Search Page - don't cache otherwise will just keep search bar
 @app.route('/search', methods=['GET', 'POST'])
+@login_required
 def search():
     user = get_current_user()
     if not user:
         return redirect('/')
 
     user_path = f'.data/{user["id"]}/'
-    setup_json = f'{user_path}setup_data.json'
+    user_meta_json = f'{user_path}user_meta.json'
     collection_json = f'{user_path}setup_status.json'
-    if not os.path.exists(setup_json) or not os.path.exists(collection_json):
+    if not os.path.exists(user_meta_json) or not os.path.exists(collection_json):
         return redirect('/')
     
-    with open(setup_json, 'r', encoding='utf-8') as f:
-        setup_data = json.load(f)
-    playlist_dict = setup_data['playlist_dict']  # name -> id
+    with open(user_meta_json, 'r', encoding='utf-8') as f:
+        user_meta = json.load(f)
+    playlist_dict = user_meta['playlist_dict']  # name -> id
     lowercase_playlists = {name.lower(): pid for name, pid in playlist_dict.items()}
 
     # Data needed for ID/artist checks
@@ -975,6 +1258,7 @@ def search():
 
 # Single / Multiple Playlists
 @app.route('/playlists/<path:playlist_ids>')
+@login_required
 @cache.cached(timeout=300)
 def analyze_playlists(playlist_ids):
     user = get_current_user()
@@ -982,19 +1266,26 @@ def analyze_playlists(playlist_ids):
         return redirect('/')
     
     user_path = f'.data/{user["id"]}/'
-    setup_json = f'{user_path}setup_data.json'
-    if not os.path.exists(setup_json):
-        return 'Setup not found'
-    with open(setup_json, 'r', encoding='utf-8') as f:
-        setup_data = json.load(f)
-    playlist_dict = setup_data['playlist_dict']  # name -> id
+    user_meta_json = f'{user_path}user_meta.json'
+    if not os.path.exists(user_meta_json):
+        return 'User metadata not found'
+    with open(user_meta_json, 'r', encoding='utf-8') as f:
+        user_meta = json.load(f)
+    playlist_dict = user_meta['playlist_dict']  # name -> id
     id_to_name = {pid: name for name, pid in playlist_dict.items()}
     
     # Add special handling for "Liked Songs"
     id_to_name['liked_songs'] = 'Liked Songs'
 
-    all_songs_df = pd.read_json(f'{user_path}all_songs.ndjson.gz', lines=True, compression='gzip')
-    unique_songs_df = pd.read_json(f'{user_path}unique_songs.ndjson.gz', lines=True, compression='gzip')
+    # Check if data files exist
+    all_songs_path = f'{user_path}all_songs.ndjson.gz'
+    unique_songs_path = f'{user_path}unique_songs.ndjson.gz'
+    if not os.path.exists(all_songs_path) or not os.path.exists(unique_songs_path):
+        return redirect('/')
+    
+    # Load required data (NDJSON, gzipped)
+    all_songs_df = pd.read_json(all_songs_path, lines=True, compression='gzip')
+    unique_songs_df = pd.read_json(unique_songs_path, lines=True, compression='gzip')
 
     ids = playlist_ids.split('/')
     if len(ids) == 1:
@@ -1040,8 +1331,16 @@ def analyze_playlists(playlist_ids):
         boxplot = boxplots[0]
         length = boxplots[1]
         playlist_timelines = page.graph_playlist_timelines()
-        genres = page.graph_genres_by_playlists()
-        artists = page.graph_artists_by_playlists()
+        
+        try:
+            genres = page.graph_genres_by_playlists()
+            artists = page.graph_artists_by_playlists()
+        except KeyError as e:
+            if 'genres' in str(e):
+                return redirect('/')
+            raise e
+        except Exception as e:
+            return redirect('/')
 
         return render_template('analyze_playlists.html', boxplot=boxplot, length=length, playlists=names,
                                num_playlists=len(names), playlist_ids=ids,
@@ -1050,6 +1349,7 @@ def analyze_playlists(playlist_ids):
 
 # Single / Multiple Artists
 @app.route('/artists/<path:artist_names>')
+@login_required
 @cache.cached(timeout=300)
 def analyze_artists(artist_names):
     user = get_current_user()
@@ -1057,8 +1357,14 @@ def analyze_artists(artist_names):
         return redirect('/')
     
     user_path = f'.data/{user["id"]}/'
-    all_songs_df = pd.read_json(f'{user_path}all_songs.ndjson.gz', lines=True, compression='gzip')
-    unique_songs_df = pd.read_json(f'{user_path}unique_songs.ndjson.gz', lines=True, compression='gzip')
+    all_songs_path = f'{user_path}all_songs.ndjson.gz'
+    unique_songs_path = f'{user_path}unique_songs.ndjson.gz'
+    if not os.path.exists(all_songs_path) or not os.path.exists(unique_songs_path):
+        return redirect('/')
+    
+    # Load required data (NDJSON, gzipped)
+    all_songs_df = pd.read_json(all_songs_path, lines=True, compression='gzip')
+    unique_songs_df = pd.read_json(unique_songs_path, lines=True, compression='gzip')
 
     # Get global artist averages from home page for consistency
     from visualization import HomePage
@@ -1101,6 +1407,7 @@ def analyze_artists(artist_names):
 
 # Single / Multiple Songs
 @app.route('/songs/<path:song_ids>')
+@login_required
 @cache.cached(timeout=300)
 def analyze_songs(song_ids):
     user = get_current_user()
@@ -1108,8 +1415,14 @@ def analyze_songs(song_ids):
         return redirect('/')
     
     user_path = f'.data/{user["id"]}/'
-    all_songs_df = pd.read_json(f'{user_path}all_songs.ndjson.gz', lines=True, compression='gzip')
-    unique_songs_df = pd.read_json(f'{user_path}unique_songs.ndjson.gz', lines=True, compression='gzip')
+    all_songs_path = f'{user_path}all_songs.ndjson.gz'
+    unique_songs_path = f'{user_path}unique_songs.ndjson.gz'
+    if not os.path.exists(all_songs_path) or not os.path.exists(unique_songs_path):
+        return redirect('/')
+    
+    # Load required data (NDJSON, gzipped)
+    all_songs_df = pd.read_json(all_songs_path, lines=True, compression='gzip')
+    unique_songs_df = pd.read_json(unique_songs_path, lines=True, compression='gzip')
 
     ids = song_ids.split('/')
     if len(ids) == 1:
