@@ -1762,7 +1762,13 @@ class SetupData():
         songs_needing_genres = []
         artists_needing_api_calls = set()
         
-        # Check which songs need genres
+        # First pass: Collect ALL unique artist names from all songs (for search functionality)
+        for idx, row in UNIQUE_SONGS_DF.iterrows():
+            if 'artist' in row:
+                artists = row['artist'].split(', ') if isinstance(row['artist'], str) else row['artist']
+                unique_artist_names.update(artists)
+        
+        # Second pass: Check which songs need genres and collect artist IDs for API calls
         for idx, row in UNIQUE_SONGS_DF.iterrows():
             song_id = row.get('id', '')
             
@@ -1781,9 +1787,6 @@ class SetupData():
                             # Check if this artist's genres are already known
                             if artist_id not in existing_artist_genres:
                                 artists_needing_api_calls.add(artist_id)
-                if 'artist' in row:
-                    artists = row['artist'].split(', ') if isinstance(row['artist'], str) else row['artist']
-                    unique_artist_names.update(artists)
         
         # Store unique artist names as JSON for search features
         try:

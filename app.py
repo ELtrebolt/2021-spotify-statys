@@ -26,8 +26,6 @@ from flask_caching import Cache
 from flask import Flask, request, redirect, render_template, Response, jsonify, make_response, g, session
 from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
-from spotipy.cache_handler import CacheFileHandler
-
 load_dotenv()
 
 # -------------------------------Data-----------------------------------------------
@@ -50,12 +48,25 @@ app.config['PREFERRED_URL_SCHEME'] = 'https'
 # Create local folders for session and cache persistence
 session_folder = './.flask_session/'
 cache_fs_folder = './.flask_cache/'
-for d in [session_folder, cache_fs_folder]:
+data_folder = './.data/'
+
+for d in [session_folder, cache_fs_folder, data_folder]:
     if not os.path.exists(d):
-        os.makedirs(d)
+        try:
+            os.makedirs(d, mode=0o755)
+        except OSError as e:
+            # Log the error but continue - PythonAnywhere may have restrictions
+            print(f"Warning: Could not create directory {d}: {e}")
+            pass
 
 # Flask secret key (use env var in production) – keep for any flashes/CSRF, but disable Flask-Session
 app.config['SECRET_KEY'] = os.getenv('FLASK_SECRET_KEY', SECRET_KEY)
+
+# Session configuration for PythonAnywhere compatibility
+app.config['SESSION_COOKIE_SECURE'] = False
+app.config['SESSION_COOKIE_HTTPONLY'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'Lax'
+app.config['PERMANENT_SESSION_LIFETIME'] = 3600  # 1 hour
 
 # File-system caching so it persists across reloads
 app.config['CACHE_TYPE'] = 'FileSystemCache'
@@ -80,15 +91,22 @@ def before_request():
         expires_at = session.get('expires_at')
         
         if access_token and refresh_token and expires_at:
-            # Check if token will expire soon (within 2 minutes)
+            # Check if token will expire soon (within 1 minute instead of 2)
             current_time = datetime.datetime.utcnow().timestamp()
-            if current_time >= (expires_at - 120):  # 2 minutes buffer
+            if current_time >= (expires_at - 60):  # 1 minute buffer
                 # Proactively refresh token
                 new_token_info = refresh_user_token(refresh_token)
                 if not new_token_info:
-                    # Refresh failed, redirect to login
-                    session.clear()
-                    return redirect('/login')
+                    # Refresh failed, but don't clear session immediately
+                    # Let the specific route handle authentication
+                    print("Token refresh failed in before_request, but continuing...")
+                else:
+                    # Update session with new token info
+                    session['access_token'] = new_token_info['access_token']
+                    if 'expires_at' in new_token_info:
+                        session['expires_at'] = new_token_info['expires_at']
+                    if 'refresh_token' in new_token_info:
+                        session['refresh_token'] = new_token_info['refresh_token']
 
 # -------------------------------Authentication Helpers-----------------------------------------------
 
@@ -118,19 +136,14 @@ def refresh_user_token(refresh_token):
             if 'refresh_token' in new_token_info:
                 session['refresh_token'] = new_token_info['refresh_token']
             
-            # Update cache file if user_id can be determined
-            user_id = get_user_id_from_token(new_token_info['access_token'])
-            if user_id:
-                user_path = f'.data/{user_id}/'
-                cache_handler = CacheFileHandler(cache_path=f"{user_path}.cache")
-                cache_handler.save_token_to_cache(new_token_info)
-            
             return new_token_info
+        else:
+            print(f"Token refresh returned invalid response: {new_token_info}")
+            return None
     except Exception as e:
         # Log the error for debugging (in production, use proper logging)
         print(f"Token refresh failed: {str(e)}")
-    
-    return None
+        return None
 
 def handle_spotify_api_error(e, refresh_token):
     """Handle Spotify API errors and attempt token refresh if needed."""
@@ -168,18 +181,20 @@ def create_auth_manager():
     client_secret = os.getenv('SPOTIPY_CLIENT_SECRET', '').strip()
     if not client_id or not client_secret:
         raise RuntimeError('Missing SPOTIPY_CLIENT_ID or SPOTIPY_CLIENT_SECRET. Set them in .env or environment.')
+    
     return spotipy.oauth2.SpotifyOAuth(
         scope='user-read-currently-playing playlist-read-private user-top-read user-follow-read user-library-read',
         client_id=client_id,
         client_secret=client_secret,
         redirect_uri=build_redirect_uri(),
-        show_dialog=False  # Don't show dialog on subsequent logins
+        show_dialog=False,  # Don't show dialog on subsequent logins
+        cache_handler=None  # Disable caching to prevent OSError on PythonAnywhere
     )
 
 def get_user_id_from_token(access_token):
     """Get user ID from access token"""
     try:
-        temp_spotify = spotipy.Spotify(auth=access_token)
+        temp_spotify = spotipy.Spotify(auth=access_token, requests_session=True)
         user_info = temp_spotify.me()
         return user_info['id']
     except:
@@ -223,26 +238,13 @@ def get_current_user():
     expires_at = session.get('expires_at')
     
     if not access_token:
+        print("DEBUG: get_current_user() - No access_token in session")
         return None
 
-    # Check if token is expired or will expire soon (within 5 minutes)
-    current_time = datetime.datetime.utcnow().timestamp()
-    if expires_at and current_time >= (expires_at - 300):  # 5 minutes buffer
-        if refresh_token:
-            new_token_info = refresh_user_token(refresh_token)
-            if new_token_info:
-                access_token = new_token_info['access_token']
-            else:
-                # Refresh failed, clear session
-                session.clear()
-                return None
-        else:
-            # No refresh token, clear session
-            session.clear()
-            return None
-
+    # Token refresh is handled by before_request middleware
+    # Just use the current token from session
     try:
-        spotify = spotipy.Spotify(auth=access_token)
+        spotify = spotipy.Spotify(auth=access_token, requests_session=True)
         user_info = spotify.me()
         return {
             'id': user_info['id'],
@@ -251,25 +253,8 @@ def get_current_user():
             'spotify_client': spotify
         }
     except Exception as e:
-        # If API call fails, try to refresh token one more time
-        if refresh_token:
-            new_access_token = handle_spotify_api_error(e, refresh_token)
-            if new_access_token:
-                try:
-                    # Try API call again with new token
-                    spotify = spotipy.Spotify(auth=new_access_token)
-                    user_info = spotify.me()
-                    return {
-                        'id': user_info['id'],
-                        'display_name': user_info['display_name'],
-                        'access_token': new_access_token,
-                        'spotify_client': spotify
-                    }
-                except:
-                    pass
-        
-        # All attempts failed, clear session
-        session.clear()
+        print(f"DEBUG: get_current_user() - Spotify API call failed: {e}")
+        # If API call fails, let before_request handle token refresh
         return None
 
 # -------------------------------Web Page Routes-----------------------------------------------
@@ -417,6 +402,8 @@ def start_setup_2():
     """Start setup 2 (audio features) in background thread and return progress ID"""
     user = get_current_user()
     if not user:
+        print("DEBUG: start_setup_2 - get_current_user() returned None")
+        print(f"DEBUG: Session keys: {list(session.keys())}")
         return jsonify({'error': 'Not authenticated'}), 401
     
     user_path = f'.data/{user["id"]}/'
@@ -703,6 +690,81 @@ def get_progress(progress_id):
 
         return jsonify(progress_copy)
 
+# Debug route for session issues
+@app.route('/debug_session')
+@login_required
+def debug_session():
+    """Debug route to check session state."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    debug_info = {
+        'user_id': user['id'],
+        'session_keys': list(session.keys()),
+        'access_token_exists': 'access_token' in session,
+        'refresh_token_exists': 'refresh_token' in session,
+        'expires_at_exists': 'expires_at' in session,
+        'expires_at_value': session.get('expires_at'),
+        'current_time': datetime.datetime.utcnow().timestamp(),
+        'token_expired': False
+    }
+    
+    if 'expires_at' in session:
+        current_time = datetime.datetime.utcnow().timestamp()
+        debug_info['token_expired'] = current_time >= session['expires_at']
+        debug_info['time_until_expiry'] = session['expires_at'] - current_time
+    
+    return jsonify(debug_info)
+
+# Debug route for setup issues
+@app.route('/debug_setup')
+@login_required
+def debug_setup():
+    """Debug route to check setup status and file states."""
+    user = get_current_user()
+    if not user:
+        return jsonify({'error': 'Not authenticated'}), 401
+    
+    user_path = f'.data/{user["id"]}/'
+    collection_json = f'{user_path}setup_status.json'
+    all_songs_path = f'{user_path}all_songs.ndjson.gz'
+    unique_songs_path = f'{user_path}unique_songs.ndjson.gz'
+    
+    debug_info = {
+        'user_id': user['id'],
+        'user_path': user_path,
+        'files_exist': {
+            'setup_status': os.path.exists(collection_json),
+            'all_songs': os.path.exists(all_songs_path),
+            'unique_songs': os.path.exists(unique_songs_path)
+        },
+        'file_sizes': {},
+        'setup_status': None
+    }
+    
+    # Check file sizes
+    for file_path, name in [(all_songs_path, 'all_songs'), (unique_songs_path, 'unique_songs')]:
+        if os.path.exists(file_path):
+            try:
+                debug_info['file_sizes'][name] = os.path.getsize(file_path)
+            except:
+                debug_info['file_sizes'][name] = 'error'
+        else:
+            debug_info['file_sizes'][name] = 'not_found'
+    
+    # Check setup status
+    if os.path.exists(collection_json):
+        try:
+            with open(collection_json, 'r') as f:
+                debug_info['setup_status'] = json.load(f)
+        except:
+            debug_info['setup_status'] = 'error_reading'
+    else:
+        debug_info['setup_status'] = 'not_found'
+    
+    return jsonify(debug_info)
+
 # Login and Setup
 @app.route('/')
 def index():
@@ -751,7 +813,27 @@ def index():
 	
 	# If all setup complete and artifacts exist, go home
 	if status.get('setup3') and os.path.exists(all_songs_path) and os.path.exists(unique_songs_path):
-		return redirect('/home')
+		# Additional validation: check if files are not empty
+		try:
+			all_songs_size = os.path.getsize(all_songs_path)
+			unique_songs_size = os.path.getsize(unique_songs_path)
+			
+			print(f"DEBUG: File validation - all_songs: {all_songs_size} bytes, unique_songs: {unique_songs_size} bytes")
+			
+			if all_songs_size == 0 or unique_songs_size == 0:
+				# Files exist but are empty, reset setup3
+				print(f"DEBUG: Files are empty - resetting setup3")
+				status = {'setup1': True, 'setup2': True, 'setup3': False}
+				with open(collection_json, 'w', encoding='utf-8') as f:
+					json.dump(status, f)
+			else:
+				print(f"DEBUG: Files are valid - redirecting to home")
+				return redirect('/home')
+		except Exception as e:
+			print(f"DEBUG: File validation error: {e}")
+			return redirect('/home')
+	else:
+		print(f"DEBUG: Setup not complete or files missing - all_songs exists: {os.path.exists(all_songs_path)}, unique_songs exists: {os.path.exists(unique_songs_path)}")
 	
 	# Otherwise, show setup page with current status
 	return render_template('setup.html', 
@@ -783,17 +865,15 @@ def callback():
         # Persist Spotipy token cache under per-user .data directory
         user_path = f'.data/{user_id}/'
         if not os.path.exists(user_path):
-            os.makedirs(user_path)
-        cache_handler = CacheFileHandler(cache_path=f"{user_path}.cache")
-        cache_handler.save_token_to_cache(token_info)
+            try:
+                os.makedirs(user_path, mode=0o755)
+            except OSError as e:
+                print(f"Warning: Could not create user directory {user_path}: {e}")
+                # Continue without caching - the app will still work
+                pass
         
-        # Clean up default root .cache if Spotipy created it
-        try:
-            default_cache_path = '.cache'
-            if os.path.exists(default_cache_path):
-                os.remove(default_cache_path)
-        except Exception:
-            pass
+        # Tokens are already stored in Flask session, no need for file caching
+        pass
 
         # Store all token information in session
         session['access_token'] = access_token
@@ -816,7 +896,22 @@ def callback():
 # Sign out
 @app.route('/logout')
 def logout():
-    """Sign out user and clear session data."""
+    """Sign out user, delete user data folder, and clear session data."""
+    # Get current user before clearing session
+    user = get_current_user()
+    
+    # Delete user's data folder if user exists
+    if user:
+        user_path = f'.data/{user["id"]}/'
+        try:
+            if os.path.exists(user_path):
+                shutil.rmtree(user_path)
+                print(f"Deleted user data folder: {user_path}")
+        except Exception as e:
+            print(f"Error deleting user data folder {user_path}: {str(e)}")
+            # Continue with logout even if deletion fails
+    
+    # Clear session data
     session.clear()
     return redirect('/')
 

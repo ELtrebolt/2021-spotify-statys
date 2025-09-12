@@ -25,7 +25,7 @@ import matplotlib
 matplotlib.use('Agg')
 import json
 import gzip
-from flask import Markup
+from markupsafe import Markup
 import traceback
 import shutil
 import time
