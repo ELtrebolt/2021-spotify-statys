@@ -49,6 +49,11 @@
     <h2>My Library Totals:</h2>
     <h3>Across {{ overall_data[2] - 1 }} playlists, I've added {{ overall_data[0] - overall_data[5] }} songs and liked {{ overall_data[5] }} songs</h3>
     <h3>My playlists have {{ overall_data[1] }} unique songs, {{ overall_data[4] }} unique albums, and {{ overall_data[3] }} unique artists</h3>
+    <hr>
+
+    <h2>Audio Features Coverage:</h2>
+    <h3>{{ audio_features_stats.songs_with_features }} songs ({{ audio_features_stats.features_percentage }}%) have audio features</h3>
+    <h3>{{ audio_features_stats.songs_without_features }} songs ({{ audio_features_stats.no_features_percentage }}%) are missing audio features</h3>
 
 </body>
 

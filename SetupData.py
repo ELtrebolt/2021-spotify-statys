@@ -166,6 +166,287 @@ class SetupData():
         rel_path = os.path.join(self.path, 'playlist_tracks.ndjson.gz')
         self._atomic_gzip_ndjson_write(rel_path, rel)
 
+    def _load_db_all_tracks(self):
+        """Load db_all_tracks.csv into memory for fast lookups"""
+        db_path = '.data/db_all_tracks.csv'
+        if os.path.exists(db_path):
+            try:
+                return pd.read_csv(db_path)
+            except Exception as e:
+                raise Exception(f"CRITICAL ERROR: Cannot load db_all_tracks.csv: {e}. The database file is corrupted or inaccessible. Please check the file and restart the setup process.")
+        else:
+            raise Exception(f"CRITICAL ERROR: db_all_tracks.csv not found at {db_path}. This file is required for the setup process. Please ensure the audio features database is properly created.")
+    
+    def _save_audio_features_to_db(self, features_df):
+        """Save newly fetched audio features to db_all_tracks.csv using atomic operations"""
+        if features_df is None or len(features_df) == 0:
+            return
+            
+        db_path = '.data/db_all_tracks.csv'
+        
+        try:
+            # Load existing database
+            if os.path.exists(db_path):
+                existing_df = pd.read_csv(db_path)
+            else:
+                # Create new database with proper columns
+                existing_df = pd.DataFrame(columns=['id', 'danceability', 'energy', 'key', 'loudness', 'mode', 
+                                                  'speechiness', 'acousticness', 'instrumentalness', 'liveness', 
+                                                  'valence', 'tempo', 'genres'])
+            
+            # Prepare features data for database
+            audio_cols = ['danceability', 'energy', 'loudness', 'speechiness', 
+                         'acousticness', 'instrumentalness', 'liveness', 'valence', 'tempo']
+            
+            # Create new rows for database
+            new_rows = []
+            for _, row in features_df.iterrows():
+                if pd.notna(row['id']):
+                    new_row = {'id': row['id']}
+                    for col in audio_cols:
+                        new_row[col] = row.get(col, None)
+                    # Add empty genres column for new entries
+                    new_row['genres'] = None
+                    new_rows.append(new_row)
+            
+            if new_rows:
+                new_df = pd.DataFrame(new_rows)
+                
+                # Merge with existing database (update existing, add new)
+                # Use a more robust approach to avoid corruption
+                existing_df = pd.concat([existing_df, new_df], ignore_index=True)
+                existing_df = existing_df.drop_duplicates(subset=['id'], keep='last')
+                
+                # Use atomic CSV write operation
+                self._atomic_csv_write(db_path, existing_df)
+                
+        except Exception as e:
+            print(f"Warning: Could not save audio features to database: {e}")
+    
+    def _standardize_genre_format(self, genre_value):
+        """
+        Standardize genre format to a consistent list of lists of strings (nested list format).
+        This matches the expected schema: genres = LIST of LISTS
+        
+        Handles all current formats:
+        - Raw string: 'k-pop' -> [['k-pop']]
+        - String representation: "['k-pop']" -> [['k-pop']]
+        - Nested list: [['N/A']] -> [['N/A']] (already correct)
+        - Comma-separated: "rock, pop" -> [['rock', 'pop']]
+        """
+        # Handle None/NaN values
+        if genre_value is None or (isinstance(genre_value, float) and pd.isna(genre_value)):
+            return [['N/A']]
+        
+        # If already a proper nested list, clean and return
+        if isinstance(genre_value, list):
+            if all(isinstance(item, list) for item in genre_value):
+                # Already in nested format, clean each sublist
+                cleaned_nested = []
+                for sublist in genre_value:
+                    if isinstance(sublist, list):
+                        cleaned_sublist = [item.strip().strip('"\'[]') for item in sublist 
+                                          if isinstance(item, str) and item.strip()]
+                        if cleaned_sublist:
+                            cleaned_nested.append(cleaned_sublist)
+                        else:
+                            cleaned_nested.append(['N/A'])
+                return cleaned_nested if cleaned_nested else [['N/A']]
+            
+            # If it's a flat list of strings, wrap in nested format
+            elif all(isinstance(item, str) for item in genre_value):
+                cleaned = [item.strip().strip('"\'[]') for item in genre_value if item.strip()]
+                return [cleaned] if cleaned else [['N/A']]
+        
+        # Handle string values
+        if isinstance(genre_value, str):
+            genre_str = genre_value.strip()
+            
+            # Handle empty strings
+            if not genre_str:
+                return [['N/A']]
+            
+            # Try to parse as JSON first (for "['k-pop']" format)
+            if genre_str.startswith('[') and genre_str.endswith(']'):
+                try:
+                    import json
+                    parsed = json.loads(genre_str)
+                    if isinstance(parsed, list):
+                        # Recursively process the parsed list
+                        return self._standardize_genre_format(parsed)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+            
+            # Try ast.literal_eval as fallback
+            try:
+                import ast
+                parsed = ast.literal_eval(genre_str)
+                if isinstance(parsed, list):
+                    return self._standardize_genre_format(parsed)
+            except (ValueError, SyntaxError):
+                pass
+            
+            # Handle comma-separated strings
+            if ',' in genre_str:
+                genres = [g.strip().strip('"\'[]') for g in genre_str.split(',') if g.strip()]
+                return [genres] if genres else [['N/A']]
+            
+            # Single genre string
+            clean_genre = genre_str.strip('"\'[]')
+            return [[clean_genre]] if clean_genre else [['N/A']]
+        
+        # Fallback for any other type
+        return [['N/A']]
+
+    def _load_artist_genres_db(self):
+        """Load existing artist genres from db_all_artists.csv"""
+        db_path = '.data/db_all_artists.csv'
+        artist_genres_map = {}
+        
+        if os.path.exists(db_path):
+            try:
+                df = pd.read_csv(db_path)
+                for _, row in df.iterrows():
+                    artist_id = row.get('artist_id', '')
+                    genres = row.get('genres', '')
+                    
+                    if pd.notna(artist_id) and artist_id and pd.notna(genres) and genres:
+                        # Use standardized genre parsing
+                        standardized_genres = self._standardize_genre_format(genres)
+                        if standardized_genres and standardized_genres != ['N/A']:
+                            artist_genres_map[artist_id] = standardized_genres
+                
+                print(f"Loaded {len(artist_genres_map)} existing artist genres from db_all_artists.csv")
+            except Exception as e:
+                print(f"Warning: Could not load artist genres from db_all_artists.csv: {e}")
+        else:
+            print("db_all_artists.csv not found, starting with empty artist genres database")
+        
+        return artist_genres_map
+    
+    def _save_artist_genres_db(self, genres_dict):
+        """Save newly fetched artist genres to db_all_artists.csv"""
+        if not genres_dict:
+            return
+            
+        db_path = '.data/db_all_artists.csv'
+        
+        try:
+            # Load existing database
+            if os.path.exists(db_path):
+                existing_df = pd.read_csv(db_path)
+                existing_artist_ids = set(existing_df['artist_id'].dropna())
+            else:
+                # Create new database with proper columns
+                existing_df = pd.DataFrame(columns=['artist_id', 'artist_name', 'genres'])
+                existing_artist_ids = set()
+            
+            # Prepare new artist data
+            new_artists = []
+            for artist_id, genres in genres_dict.items():
+                if artist_id not in existing_artist_ids:
+                    # Get artist name from Spotify API if not provided
+                    artist_name = "Unknown Artist"
+                    try:
+                        artist_info = self.SPOTIFY.artist(artist_id)
+                        artist_name = artist_info.get('name', 'Unknown Artist')
+                    except:
+                        pass  # Use default name if API call fails
+                    
+                    # Ensure genres are standardized before saving
+                    standardized_genres = self._standardize_genre_format(genres)
+                    new_artists.append({
+                        'artist_id': artist_id,
+                        'artist_name': artist_name,
+                        'genres': str(standardized_genres)  # Convert list to string for CSV storage
+                    })
+            
+            if new_artists:
+                new_df = pd.DataFrame(new_artists)
+                
+                # Combine with existing database
+                combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+                
+                # Remove any duplicates (shouldn't happen with our check above, but safety)
+                combined_df = combined_df.drop_duplicates(subset=['artist_id'], keep='last')
+                
+                # Save using atomic operation
+                self._atomic_csv_write(db_path, combined_df)
+                print(f"Saved {len(new_artists)} new artists to db_all_artists.csv")
+            else:
+                print("No new artists to save to db_all_artists.csv")
+                
+        except Exception as e:
+            print(f"Warning: Could not save artist genres to database: {e}")
+
+    def _save_genres_to_db(self, genres_dict):
+        """Save newly fetched artist genres to db_all_tracks.csv"""
+        if not genres_dict:
+            return
+            
+        db_path = '.data/db_all_tracks.csv'
+        
+        try:
+            # Load existing database
+            if os.path.exists(db_path):
+                existing_df = pd.read_csv(db_path)
+            else:
+                print("Warning: db_all_tracks.csv not found, cannot save genres")
+                return
+            
+            # We need to map artist genres to songs in the database
+            # Since db_all_tracks.csv doesn't have artist names, we need to use the user's data
+            # to find which songs belong to which artists, then update the database
+            
+            # Load user's unique songs to get artist-song mappings
+            user_path = f'.data/{self.USER_ID}/'
+            unique_songs_path = f'{user_path}unique_songs.ndjson.gz'
+            
+            if not os.path.exists(unique_songs_path):
+                print("Warning: Cannot find user's unique songs to map artist genres")
+                return
+            
+            # Load user's unique songs to get artist-song mappings
+            unique_songs_df = pd.read_json(unique_songs_path, lines=True, compression='gzip')
+            
+            # Create a mapping from song ID to artist genres
+            song_to_genres = {}
+            for _, row in unique_songs_df.iterrows():
+                song_id = row.get('id', '')
+                artist_ids = row.get('artist_ids', '')
+                
+                if pd.notna(song_id) and pd.notna(artist_ids):
+                    # Parse artist IDs (comma-separated string)
+                    if isinstance(artist_ids, str):
+                        artist_id_list = [aid.strip() for aid in artist_ids.split(',') if aid.strip()]
+                    else:
+                        artist_id_list = artist_ids if isinstance(artist_ids, list) else []
+                    
+                    # Check if any of this song's artists are in our genres_dict
+                    for artist_id in artist_id_list:
+                        if artist_id in genres_dict:
+                            song_to_genres[song_id] = genres_dict[artist_id]
+                            break  # Use first matching artist's genres
+            
+            # Update the database with new genres
+            updated_count = 0
+            for idx, row in existing_df.iterrows():
+                song_id = row.get('id', '')
+                if song_id in song_to_genres:
+                    # Update the genres for this song
+                    existing_df.at[idx, 'genres'] = song_to_genres[song_id]
+                    updated_count += 1
+            
+            # Save the updated database using atomic operation
+            if updated_count > 0:
+                self._atomic_csv_write(db_path, existing_df)
+                print(f"Updated {updated_count} songs with artist genres in db_all_tracks.csv")
+            else:
+                print("No songs found to update with artist genres")
+                
+        except Exception as e:
+            print(f"Warning: Could not save genres to database: {e}")
+
     def _atomic_gzip_ndjson_write(self, path: str, df: pd.DataFrame):
         """Atomically write a DataFrame as gzipped NDJSON."""
         temp_path = None
@@ -209,44 +490,208 @@ class SetupData():
             time.sleep(0.2)
             
             # Atomically rename temp file to target file
-            if os.path.exists(path):
-                try:
-                    os.remove(path)
-                    time.sleep(0.1)  # Small delay after removal
-                except Exception as remove_error:
-                    # If we can't remove the target, try to use a different name
-                    backup_path = f"{path}.backup"
-                    try:
-                        if os.path.exists(backup_path):
-                            os.remove(backup_path)
-                        os.rename(path, backup_path)
-                        time.sleep(0.1)
-                    except:
-                        pass  # Continue with the write attempt
-            
-            # Now rename the temp file
-            os.rename(temp_path, path)
-            temp_path = None  # Mark as successfully moved
-            
-            # Small delay to ensure file is fully written to disk
-            time.sleep(0.1)
-            
-            # Verify the file can be read back (basic integrity check)
-            try:
-                if os.path.exists(path):
-                    with gzip.open(path, 'rb') as f:
-                        # Try to read first few bytes to verify gzip integrity
-                        f.read(1024)
-                else:
-                    raise Exception(f"Target file {path} does not exist after rename")
-            except Exception as verify_error:
-                # If verification fails, remove the corrupted file
+            # On Windows, we need to ensure the target file is completely removed
+            max_attempts = 5
+            for attempt in range(max_attempts):
                 if os.path.exists(path):
                     try:
                         os.remove(path)
+                        time.sleep(0.1)  # Small delay after removal
+                        # Verify the file is actually gone
+                        if not os.path.exists(path):
+                            break
+                    except Exception as remove_error:
+                        # If we can't remove the target, try to use a different name
+                        backup_path = f"{path}.backup.{attempt}"
+                        try:
+                            if os.path.exists(backup_path):
+                                os.remove(backup_path)
+                            os.rename(path, backup_path)
+                            time.sleep(0.1)
+                            # Verify the file is actually moved
+                            if not os.path.exists(path):
+                                break
+                        except:
+                            pass  # Continue with the write attempt
+                
+                # If this is the last attempt and file still exists, force remove
+                if attempt == max_attempts - 1 and os.path.exists(path):
+                    try:
+                        os.chmod(path, 0o777)  # Make sure we have write permissions
+                        os.remove(path)
+                        time.sleep(0.2)
                     except:
-                        pass
-                raise Exception(f"File verification failed after write: {verify_error}")
+                        pass  # Last resort - try to continue anyway
+            
+            # Now rename the temp file - use replace on Windows to handle existing files
+            try:
+                if os.name == 'nt':  # Windows
+                    # On Windows, use replace=True to overwrite existing files
+                    os.replace(temp_path, path)
+                else:
+                    os.rename(temp_path, path)
+            except FileExistsError:
+                # If file still exists, try one more time with explicit removal
+                if os.path.exists(path):
+                    os.remove(path)
+                    time.sleep(0.1)
+                os.rename(temp_path, path)
+            temp_path = None  # Mark as successfully moved
+            
+            # Small delay to ensure file is fully written to disk
+            time.sleep(0.2)
+            
+            # Verify the file can be read back (basic integrity check)
+            # On Windows, we need to wait a bit longer for the file system to catch up
+            max_verify_attempts = 5
+            verify_success = False
+            
+            for attempt in range(max_verify_attempts):
+                try:
+                    if os.path.exists(path):
+                        # Additional small delay to ensure file handles are released
+                        time.sleep(0.1)
+                        
+                        with gzip.open(path, 'rb') as f:
+                            # Try to read first few bytes to verify gzip integrity
+                            f.read(1024)
+                        verify_success = True
+                        break
+                    else:
+                        if attempt < max_verify_attempts - 1:
+                            time.sleep(0.2)  # Wait before retrying
+                        else:
+                            raise Exception(f"Target file {path} does not exist after rename")
+                except Exception as verify_error:
+                    if attempt < max_verify_attempts - 1:
+                        time.sleep(0.2)  # Wait before retrying
+                    else:
+                        # If verification fails, remove the corrupted file
+                        if os.path.exists(path):
+                            try:
+                                os.remove(path)
+                            except:
+                                pass
+                        raise Exception(f"File verification failed after write: {verify_error}")
+            
+            if not verify_success:
+                raise Exception(f"File verification failed after {max_verify_attempts} attempts")
+            
+        except Exception as e:
+            # Clean up temp file on any error
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass  # Ignore cleanup errors
+            raise
+
+    def _atomic_csv_write(self, path: str, df: pd.DataFrame):
+        """
+        Atomically write a DataFrame to a CSV file to prevent corruption.
+        
+        Args:
+            path: Path to the target CSV file
+            df: DataFrame to write
+        """
+        import time
+        
+        # Create temporary file path
+        temp_path = f"{path}.{int(time.time() * 1000)}.tmp"
+        
+        try:
+            # Write DataFrame to temporary file
+            df.to_csv(temp_path, index=False)
+            
+            # Close any file handles explicitly
+            time.sleep(0.1)
+            
+            # Atomically rename temp file to target file
+            # On Windows, we need to ensure the target file is completely removed
+            max_attempts = 5
+            for attempt in range(max_attempts):
+                if os.path.exists(path):
+                    try:
+                        os.remove(path)
+                        time.sleep(0.1)  # Small delay after removal
+                        # Verify the file is actually gone
+                        if not os.path.exists(path):
+                            break
+                    except Exception as remove_error:
+                        # If we can't remove the target, try to use a different name
+                        backup_path = f"{path}.backup.{attempt}"
+                        try:
+                            if os.path.exists(backup_path):
+                                os.remove(backup_path)
+                            os.rename(path, backup_path)
+                            time.sleep(0.1)
+                            # Verify the file is actually moved
+                            if not os.path.exists(path):
+                                break
+                        except:
+                            pass  # Continue with the write attempt
+                
+                # If this is the last attempt and file still exists, force remove
+                if attempt == max_attempts - 1 and os.path.exists(path):
+                    try:
+                        os.chmod(path, 0o777)  # Make sure we have write permissions
+                        os.remove(path)
+                        time.sleep(0.2)
+                    except:
+                        pass  # Last resort - try to continue anyway
+            
+            # Now rename the temp file - use replace on Windows to handle existing files
+            try:
+                if os.name == 'nt':  # Windows
+                    # On Windows, use replace=True to overwrite existing files
+                    os.replace(temp_path, path)
+                else:
+                    os.rename(temp_path, path)
+            except FileExistsError:
+                # If file still exists, try one more time with explicit removal
+                if os.path.exists(path):
+                    os.remove(path)
+                    time.sleep(0.1)
+                os.rename(temp_path, path)
+            temp_path = None  # Mark as successfully moved
+            
+            # Small delay to ensure file is fully written to disk
+            time.sleep(0.2)
+            
+            # Verify the file can be read back (basic integrity check)
+            # On Windows, we need to wait a bit longer for the file system to catch up
+            max_verify_attempts = 5
+            verify_success = False
+            
+            for attempt in range(max_verify_attempts):
+                try:
+                    if os.path.exists(path):
+                        # Additional small delay to ensure file handles are released
+                        time.sleep(0.1)
+                        
+                        # Try to read the CSV to verify integrity
+                        test_df = pd.read_csv(path, nrows=1)
+                        verify_success = True
+                        break
+                    else:
+                        if attempt < max_verify_attempts - 1:
+                            time.sleep(0.2)  # Wait before retrying
+                        else:
+                            raise Exception(f"Target file {path} does not exist after rename")
+                except Exception as verify_error:
+                    if attempt < max_verify_attempts - 1:
+                        time.sleep(0.2)  # Wait before retrying
+                    else:
+                        # If verification fails, remove the corrupted file
+                        if os.path.exists(path):
+                            try:
+                                os.remove(path)
+                            except:
+                                pass
+                        raise Exception(f"File verification failed after write: {verify_error}")
+            
+            if not verify_success:
+                raise Exception(f"File verification failed after {max_verify_attempts} attempts")
             
         except Exception as e:
             # Clean up temp file on any error
@@ -558,7 +1003,12 @@ class SetupData():
             # Export to CSV for specific user ID
             if self.USER_ID == 'qf26s87ilixm0wn6njz7amx2f':
                 try:
-                    csv_path = '.data/all_songs_df.csv'
+                    # Create my-data directory if it doesn't exist
+                    my_data_path = '.data/my-data/'
+                    if not os.path.exists(my_data_path):
+                        os.makedirs(my_data_path)
+                    
+                    csv_path = os.path.join(my_data_path, 'all_songs_df.csv')
                     ALL_SONGS_DF.to_csv(csv_path, index=False)
                 except Exception as e:
                     yield f'data:Warning: CSV export failed: {str(e)}<br/>\n\n\n'
@@ -598,10 +1048,21 @@ class SetupData():
                     yield f"data:Warning: Could not read status file: {str(e)}<br>\n\n\n"
             
             # Step 1: Getting All of your Unique Songs...
+            step1_start_time = time.time()
             yield "data:PROGRESS: 1/6 Getting Your Unique Songs...<br>\n\n\n"
-            UNIQUE_SONGS_DF = self._get_unique_songs_df()
+            
+            # Create progress callback for Step 1 (but don't yield intermediate messages)
+            step1_progress_messages = []
+            def step1_progress_callback(message):
+                step1_progress_messages.append(f"data:PROGRESS: 1/6 Getting Your Unique Songs... ({message})<br>\n\n\n")
+            
+            UNIQUE_SONGS_DF = self._get_unique_songs_df(step1_progress_callback)
+            
+            step1_end_time = time.time()
+            step1_duration = step1_end_time - step1_start_time
             
             # Step 2: Retrieving Audio Features Database...
+            step2_start_time = time.time()
             yield "data:PROGRESS: 2/6 Retrieving Audio Features Database...<br>\n\n\n"
             
             # Check if db_all_tracks.csv exists
@@ -612,10 +1073,15 @@ class SetupData():
                     
                     # Create a mapping from Spotify ID to audio features
                     audio_features_map = {}
+                    songs_in_database = set()  # Track all songs in database, regardless of features
+                    
                     for _, row in db_tracks_df.iterrows():
                         spotify_id = row.get('id', '')
                         if pd.notna(spotify_id) and spotify_id:
-                            # Store audio features
+                            # Always add to songs_in_database set
+                            songs_in_database.add(spotify_id)
+                            
+                            # Store audio features if they exist
                             features = {}
                             for col in ['acousticness', 'danceability', 'energy', 'instrumentalness', 
                                        'key', 'liveness', 'loudness', 'mode', 'speechiness', 
@@ -626,9 +1092,11 @@ class SetupData():
                             if features:  # Only store if we have some features
                                 audio_features_map[spotify_id] = features
                     
+                    
 
                     
                     # Apply existing audio features to UNIQUE_SONGS_DF
+                    
                     features_applied = 0
                     for idx, row in UNIQUE_SONGS_DF.iterrows():
                         # UNIQUE_SONGS_DF['id'] is now a single string, not a list
@@ -644,18 +1112,25 @@ class SetupData():
                                     UNIQUE_SONGS_DF.at[idx, col] = value
                             features_applied += 1
                     
+                    # Step 2 completion tracking
+                    step2_end_time = time.time()
+                    step2_duration = step2_end_time - step2_start_time
+                    
                     # Step 3: Matching Database with Your Library...
                     yield f"data:PROGRESS: 3/6 Matching Database with Your Library...<br>\n\n\n"
 
                     
                 except Exception as e:
-                    yield f"data:Warning: Could not load db_all_tracks.csv: {str(e)}<br>\n\n\n"
-                    audio_features_map = {}
-                    # Step 3: Matching Database with Your Library... (no database)
-                    yield f"data:PROGRESS: 3/6 Matching Audio Features with Your Library...<br>\n\n\n"
+                    raise Exception(f"CRITICAL ERROR: Cannot load db_all_tracks.csv: {str(e)}. The database file is corrupted or inaccessible. Please check the file and restart the setup process.")
             else:
-                yield f"data:PROGRESS: 3/6 Matching Audio Features with Your Library...<br>\n\n\n"
-                audio_features_map = {}
+                # Step 2 completion tracking (even if database not found)
+                step2_end_time = time.time()
+                step2_duration = step2_end_time - step2_start_time
+                raise Exception(f"CRITICAL ERROR: db_all_tracks.csv not found at {db_tracks_file}. This file is required for the setup process. Please ensure the audio features database is properly created.")
+            
+            # Initialize songs_in_database if not already set (shouldn't happen with current logic)
+            if 'songs_in_database' not in locals():
+                songs_in_database = set()
             
             # Initialize audio feature columns (only for columns that don't already have data)
             for col in ['acousticness', 'danceability', 'energy', 'instrumentalness', 
@@ -674,7 +1149,7 @@ class SetupData():
                 # UNIQUE_SONGS_DF['id'] is now a single string, not a list
                 
                 # Check if this song is in the database (regardless of whether it has features)
-                is_in_database = song_id in audio_features_map
+                is_in_database = song_id in songs_in_database
                 
                 if is_in_database:
                     # Song is in database - check if it has features
@@ -698,6 +1173,9 @@ class SetupData():
             valid_song_ids = [sid for sid in song_ids if sid is not None]
             total_songs_needing_features = len(valid_song_ids)
             total_songs_total = len(UNIQUE_SONGS_DF)
+            
+            # Collect all audio features first, then save to database once at the end
+            all_new_features = []  # Store all new features to save at once
             
             # Log the filtering results
 
@@ -744,6 +1222,9 @@ class SetupData():
 
                     
                     if batch_features_df is not None and not batch_features_df.empty:
+                        # Collect features for later batch save (instead of saving immediately)
+                        all_new_features.append(batch_features_df)
+                        
                         # Merge the features back to UNIQUE_SONGS_DF
                         for _, feature_row in batch_features_df.iterrows():
                             spotify_id = feature_row['id']
@@ -785,6 +1266,21 @@ class SetupData():
                 
                 # Final progress update for step 4
                 yield f"data:PROGRESS: 4/6 Getting {total_songs_needing_features}/{total_songs_needing_features} Songs (100%) Without Match...<br>\n\n\n"
+            
+            # Save all collected audio features to database in one atomic operation
+            if all_new_features:
+                yield f"data:SUCCESS: Saving {len(all_new_features)} batches of new audio features to database...<br>\n\n\n"
+                try:
+                    # Combine all collected features into one DataFrame
+                    combined_features_df = pd.concat(all_new_features, ignore_index=True)
+                    
+                    # Save to database using atomic operation
+                    self._save_audio_features_to_db(combined_features_df)
+                    
+                    yield f"data:SUCCESS: Successfully saved {len(combined_features_df)} new audio features to database<br>\n\n\n"
+                except Exception as e:
+                    yield f"data:ERROR: Failed to save audio features to database: {str(e)}<br>\n\n\n"
+                    raise
             
             # Calculate final statistics
             songs_with_features = UNIQUE_SONGS_DF[['acousticness', 'danceability', 'energy', 'instrumentalness', 
@@ -923,11 +1419,16 @@ class SetupData():
             if self.USER_ID == 'qf26s87ilixm0wn6njz7amx2f':
                 try:
                     # Export unique_songs_df to CSV
-                    unique_csv_path = '.data/unique_songs_df.csv'
+                    # Create my-data directory if it doesn't exist
+                    my_data_path = '.data/my-data/'
+                    if not os.path.exists(my_data_path):
+                        os.makedirs(my_data_path)
+                    
+                    unique_csv_path = os.path.join(my_data_path, 'unique_songs_df.csv')
                     UNIQUE_SONGS_DF.to_csv(unique_csv_path, index=False)
                     
                     # Export all_songs_df to CSV (in case it was updated)
-                    all_csv_path = '.data/all_songs_df.csv'
+                    all_csv_path = os.path.join(my_data_path, 'all_songs_df.csv')
                     ALL_SONGS_DF.to_csv(all_csv_path, index=False)
                 except Exception as e:
                     yield f'data:Warning: CSV export failed: {str(e)}<br/>\n\n\n'
@@ -953,8 +1454,10 @@ class SetupData():
             yield f"data:Traceback: {traceback.format_exc().replace(chr(10), '<br>')}<br>\n\n\n"
             raise
 
-    def _get_unique_songs_df(self):
+    def _get_unique_songs_df(self, progress_callback=None):
         # Changing cols will be condensed into a list = ex: unique song will have a col "playlist" = [playlist1, playlist2]
+        if progress_callback:
+            progress_callback("Loading all songs data...")
         try:
             ALL_SONGS_DF = pd.read_json(f'{self.path}all_songs.ndjson.gz', lines=True, compression='gzip')
         except Exception as e:
@@ -976,6 +1479,9 @@ class SetupData():
                 else:
                     raise Exception(f"File corruption detected in all_songs.ndjson.gz: {str(e)}. Please restart Setup 1.")
 
+        if progress_callback:
+            progress_callback("Grouping duplicate songs...")
+        
         # OPTIMIZED GROUPBY: Use specific aggregation functions instead of lambda for better performance
         changing_cols = ['id', 'playlist', 'date_added']
         
@@ -993,6 +1499,9 @@ class SetupData():
         # Perform optimized groupby with specific aggregation functions
         UNIQUE_SONGS_DF = ALL_SONGS_DF.groupby(['name', 'artist', 'album'], as_index=False).agg(agg_dict)
         
+        if progress_callback:
+            progress_callback("Removing duplicate songs...")
+        
         duplicates = UNIQUE_SONGS_DF[UNIQUE_SONGS_DF.duplicated(subset=['name', 'artist'], keep=False)]
         duplicates.sort_values(by=['name', 'popularity'], ascending=[True, False], inplace=True)
         duplicates_with_lower_popularity = duplicates.iloc[1::2]
@@ -1001,6 +1510,9 @@ class SetupData():
         UNIQUE_SONGS_DF.drop(duplicates_with_lower_popularity.index, inplace=True)
         
         # Audio features will be added in a separate step for better progress visibility
+        
+        if progress_callback:
+            progress_callback("Calculating percentiles...")
         
         # VECTORIZED PERCENTILE CALCULATION: Use pandas operations instead of apply for better performance
         existing_percentile_cols = [col for col in ['popularity', 'duration'] if col in UNIQUE_SONGS_DF.columns]
@@ -1011,6 +1523,9 @@ class SetupData():
 
         # VECTORIZED PLAYLIST COUNT: Use pandas operations instead of list comprehension
         UNIQUE_SONGS_DF['num_playlists'] = UNIQUE_SONGS_DF['playlist'].str.len()
+
+        if progress_callback:
+            progress_callback("Saving unique songs data...")
 
         # Also write compressed NDJSON for filesystem mode
         self._atomic_gzip_ndjson_write(os.path.join(self.path, 'unique_songs.ndjson.gz'), UNIQUE_SONGS_DF)
@@ -1170,30 +1685,164 @@ class SetupData():
         except Exception as e:
             raise Exception(f"Failed to read unique_songs.ndjson.gz: {str(e)}. The file may be corrupted. Please restart Setup 2.")
 
-        # Get Genres for Each Song By Artist Genres - Takes 2 minutes for 1000 unique artists
+        # Step 1: Load existing artist genres from db_all_artists.csv
+        yield f'data:PROGRESS:Step 5/10: Loading existing artist genres from database...<br>\n\n\n'
+        existing_artist_genres = self._load_artist_genres_db()
+        
+        # Step 2: Load existing song genres from db_all_tracks.csv (for backward compatibility)
+        db_tracks_file = '.data/db_all_tracks.csv'
+        existing_song_genres_map = {}
+        songs_with_existing_genres = 0
+        
+        # Helper function to clean corrupted genre data
+        def clean_genre_string(genre_str):
+            """Clean and parse genre strings, handling various formats."""
+            if not genre_str or pd.isna(genre_str):
+                return []
+            
+            try:
+                # Try to parse as Python literal first
+                import ast
+                parsed = ast.literal_eval(genre_str)
+                
+                # Preserve nested structure for multiple artists
+                if isinstance(parsed, list):
+                    cleaned_genres = []
+                    for item in parsed:
+                        if isinstance(item, list):
+                            # Clean nested list (each artist's genres)
+                            cleaned_nested = []
+                            for nested_item in item:
+                                if isinstance(nested_item, str) and len(nested_item) > 1 and nested_item != 'N/A':
+                                    cleaned_nested.append(nested_item.strip())
+                            if cleaned_nested:
+                                cleaned_genres.append(cleaned_nested)
+                        elif isinstance(item, str) and len(item) > 1 and item != 'N/A':
+                            # Single genre as list
+                            cleaned_genres.append([item.strip()])
+                    return cleaned_genres if cleaned_genres else []
+                else:
+                    # Single genre
+                    if isinstance(parsed, str) and len(parsed) > 1 and parsed != 'N/A':
+                        return [[parsed.strip()]]
+                    return []
+                
+            except (ValueError, SyntaxError):
+                # Fallback: treat as regular string
+                if isinstance(genre_str, str) and len(genre_str) > 1:
+                    return [[genre_str.strip()]]
+                else:
+                    return []
+        
+        if os.path.exists(db_tracks_file):
+            try:
+                yield f'data:PROGRESS:Step 5/10: Loading existing song genres from tracks database...<br>\n\n\n'
+                db_tracks_df = pd.read_csv(db_tracks_file)
+                
+                # Create a mapping from Spotify ID to genres
+                for _, row in db_tracks_df.iterrows():
+                    spotify_id = row.get('id', '')
+                    genres = row.get('genres', '')
+                    
+                    if pd.notna(spotify_id) and spotify_id and pd.notna(genres) and genres:
+                        # Use the helper function to clean and parse genres
+                        cleaned_genres = clean_genre_string(genres)
+                        if cleaned_genres:
+                            existing_song_genres_map[spotify_id] = cleaned_genres
+                        # If no valid genres found, skip this entry
+                
+                yield f'data:PROGRESS:Step 5/10: Found {len(existing_song_genres_map)} existing song genre entries in tracks database<br>\n\n\n'
+                
+            except Exception as e:
+                yield f'data:Warning: Could not load existing song genres from db_all_tracks.csv: {str(e)}<br>\n\n\n'
+                existing_song_genres_map = {}
+
+        # Step 3: Determine which songs need genres and which artists need API calls
         unique_artist_names, unique_artist_ids = set(), set()
-        for i in zip(UNIQUE_SONGS_DF['artist'], UNIQUE_SONGS_DF['artist_ids']):
-            unique_artist_names = unique_artist_names | set(i[0].split(', '))
-            unique_artist_ids = unique_artist_ids | set(i[1].split(', '))
+        songs_needing_genres = []
+        artists_needing_api_calls = set()
+        
+        # Check which songs need genres
+        for idx, row in UNIQUE_SONGS_DF.iterrows():
+            song_id = row.get('id', '')
+            
+            # Check if this song already has genres from the tracks database
+            if song_id in existing_song_genres_map:
+                songs_with_existing_genres += 1
+                # Skip this song - already has genres
+            else:
+                # Song needs genres - collect artist info
+                songs_needing_genres.append(idx)
+                if 'artist_ids' in row:
+                    artist_ids = row['artist_ids'].split(', ') if isinstance(row['artist_ids'], str) else row['artist_ids']
+                    for artist_id in artist_ids:
+                        if artist_id and artist_id != '':
+                            unique_artist_ids.add(artist_id)
+                            # Check if this artist's genres are already known
+                            if artist_id not in existing_artist_genres:
+                                artists_needing_api_calls.add(artist_id)
+                if 'artist' in row:
+                    artists = row['artist'].split(', ') if isinstance(row['artist'], str) else row['artist']
+                    unique_artist_names.update(artists)
+        
         # Store unique artist names as JSON for search features
         try:
             with open(os.path.join(self.path, 'unique_artist_names.json'), 'w', encoding='utf-8') as f:
                 json.dump(sorted(list(unique_artist_names)), f)
         except Exception:
             pass
-        # if '' in unique_artist_ids:
-        #     unique_artist_ids.remove('')
-
-        # Save artist genres from Spotify API all at once using dict(), then make new cols for dataframes
-        # {artist1: genres_list, artist2: ['N/A']}
+        
+        # Remove empty artist IDs
+        unique_artist_ids = {aid for aid in unique_artist_ids if aid and aid != ''}
+        artists_needing_api_calls = {aid for aid in artists_needing_api_calls if aid and aid != ''}
+        
+        # Step 4: Check if we need to make any API calls
+        if not artists_needing_api_calls:
+            yield f'data:PROGRESS:Step 5/10: All artist genres already in database! Skipping API calls.<br>\n\n\n'
+            
+            # Apply existing genres to DataFrames using both sources
+            for df in [ALL_SONGS_DF, UNIQUE_SONGS_DF]:
+                genres_list = []
+                for idx, row in df.iterrows():
+                    song_id = row.get('id', '')
+                    if song_id in existing_song_genres_map:
+                        # Use existing song genres
+                        genres_list.append(existing_song_genres_map[song_id])
+                    else:
+                        # Try to get genres from artist database
+                        song_genres = []
+                        if 'artist_ids' in row:
+                            artist_ids = row['artist_ids'].split(', ') if isinstance(row['artist_ids'], str) else row['artist_ids']
+                            for artist_id in artist_ids:
+                                if artist_id in existing_artist_genres:
+                                    song_genres.append(existing_artist_genres[artist_id])
+                                    break  # Use first matching artist's genres
+                        if not song_genres:
+                            song_genres.append(['N/A'])
+                        genres_list.append(song_genres)
+                df['genres'] = genres_list
+            
+            # Filesystem-friendly outputs for analytics
+            self._atomic_gzip_ndjson_write(os.path.join(self.path, 'all_songs.ndjson.gz'), ALL_SONGS_DF)
+            self._atomic_gzip_ndjson_write(os.path.join(self.path, 'unique_songs.ndjson.gz'), UNIQUE_SONGS_DF)
+            return
+        
+        # Step 5: Make API calls only for artists that need genres
         genres_dict = dict()
-        total = len(unique_artist_ids)
-        unique_artist_ids = list(unique_artist_ids)
+        total_artists_to_fetch = len(artists_needing_api_calls)
+        artists_needing_api_calls = list(artists_needing_api_calls)
+        
+        yield f'data:PROGRESS:Step 5/10: Getting genres for {len(songs_needing_genres)} songs ({total_artists_to_fetch} new artists)...<br>\n\n\n'
+        
+        # Debug: Show sample of artists that need API calls
+        if artists_needing_api_calls:
+            sample_artists = artists_needing_api_calls[:5]  # Show first 5
+            yield f'data:DEBUG: Sample artists needing API calls: {", ".join(sample_artists)}<br>\n\n\n'
 
         # Getting 50 artists at a time is a LOT faster than getting 1 artist at a time
-        for i in range(0, total, 50):
+        for i in range(0, total_artists_to_fetch, 50):
             try:
-                listy = self.SPOTIFY.artists(unique_artist_ids[i:i+50])
+                listy = self.SPOTIFY.artists(artists_needing_api_calls[i:i+50])
                 for a in listy['artists']:
                     try:
                         g = a['genres']
@@ -1205,8 +1854,8 @@ class SetupData():
                         genres_dict[a['id']] = ['N/A']
                 
                 # Yield progress update (single line that gets updated)
-                collected = min(i + 50, total)
-                yield f'data:PROGRESS:Step 5/10: Getting Artist Genres... ({collected}/{total} artists collected)<br>\n\n\n'
+                collected = min(i + 50, total_artists_to_fetch)
+                yield f'data:PROGRESS:Step 5/10: Getting Artist Genres... ({collected}/{total_artists_to_fetch} artists collected)<br>\n\n\n'
                 
                 # Rate limiting protection - wait between batches
                 time.sleep(1.0)  # 1 second between batches of 50 artists
@@ -1217,7 +1866,7 @@ class SetupData():
                     time.sleep(30)
                     # Retry the same batch
                     try:
-                        listy = self.SPOTIFY.artists(unique_artist_ids[i:i+50])
+                        listy = self.SPOTIFY.artists(artists_needing_api_calls[i:i+50])
                         for a in listy['artists']:
                             try:
                                 g = a['genres']
@@ -1229,34 +1878,55 @@ class SetupData():
                                 genres_dict[a['id']] = ['N/A']
                         
                         # Yield progress update after retry (single line that gets updated)
-                        collected = min(i + 50, total)
-                        yield f'data:PROGRESS:Step 5/10: Getting Artist Genres... ({collected}/{total} artists collected)<br>\n\n\n'
+                        collected = min(i + 50, total_artists_to_fetch)
+                        yield f'data:PROGRESS:Step 5/10: Getting Artist Genres... ({collected}/{total_artists_to_fetch} artists collected)<br>\n\n\n'
                     except Exception as retry_error:
                         raise Exception(f"Rate limited by Spotify API. Please wait a few minutes and try again. Error: {str(retry_error)}")
                 else:
                     raise
 
-        # Populate Dataframes
+        # Step 6: Save newly fetched artist genres to both databases
+        if genres_dict:
+            # Save to artist database
+            self._save_artist_genres_db(genres_dict)
+            # Also save to tracks database for backward compatibility
+            self._save_genres_to_db(genres_dict)
+        
+        # Step 7: Populate DataFrames - combine existing genres with newly fetched ones
         for df in [ALL_SONGS_DF, UNIQUE_SONGS_DF]:
             genres_list = []
-            for i in df['artist_ids']:
-                song_genres = []
-                for j in i.split(', '):
-                    # Potential error here? ufo ufo does not have la pop as a genre
-                    try:
-                        song_genres.append(genres_dict[j])
-                    except Exception as e:
-                        a = self.SPOTIFY.artist(j)
-                        if a['genres']:
-                            song_genres.append(a['genres'])
-                        else:
-                            song_genres.append('N/A')
-                genres_list.append(song_genres)
+            for idx, row in df.iterrows():
+                song_id = row.get('id', '')
+                
+                # Check if song already has genres from tracks database
+                if song_id in existing_song_genres_map:
+                    genres_list.append(existing_song_genres_map[song_id])
+                else:
+                    # Song needs genres from artist lookup (existing + newly fetched)
+                    song_genres = []
+                    if 'artist_ids' in row:
+                        artist_ids = row['artist_ids'].split(', ') if isinstance(row['artist_ids'], str) else row['artist_ids']
+                        for artist_id in artist_ids:
+                            # Check existing artist genres first
+                            if artist_id in existing_artist_genres:
+                                song_genres.append(existing_artist_genres[artist_id])
+                                break  # Use first matching artist's genres
+                            # Then check newly fetched genres
+                            elif artist_id in genres_dict:
+                                song_genres.append(genres_dict[artist_id])
+                                break  # Use first matching artist's genres
+                    if not song_genres:
+                        song_genres.append(['N/A'])
+                    genres_list.append(song_genres)
+            
             df['genres'] = genres_list
+            
 
         # Filesystem-friendly outputs for analytics
         self._atomic_gzip_ndjson_write(os.path.join(self.path, 'all_songs.ndjson.gz'), ALL_SONGS_DF)
         self._atomic_gzip_ndjson_write(os.path.join(self.path, 'unique_songs.ndjson.gz'), UNIQUE_SONGS_DF)
+        
+        yield f'data:PROGRESS:Step 5/10: Genre processing complete! {songs_with_existing_genres} songs already had genres, {len(songs_needing_genres)} songs got new genres from {total_artists_to_fetch} artists.<br>\n\n\n'
 
 
     # Group Data with Top Artists/Songs, Genres, and setup Pages
@@ -1371,7 +2041,8 @@ class SetupData():
             if missing_files:
                 yield f'data:Warning: Missing required files: {", ".join(missing_files)}<br>\n\n\n'
             else:
-                yield f'data:All required data files verified successfully<br>\n\n\n'
+                pass
+                # yield f'data:All required data files verified successfully<br>\n\n\n'
 
             yield f'data:Step 9/10: Data preparation complete...<br>\n\n\n'
 

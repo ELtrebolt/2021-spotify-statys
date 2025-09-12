@@ -28,8 +28,12 @@
     <hr>
 
     <body>
-        <h2>Top 50 Rankings</h2>
-        {{ top_rank_table }} 
+        {% if top_rank_table and 'CLOSEST_FITTING_PLAYLISTS_CHART' in top_rank_table|string %}
+            <h2>Closest Fitting Playlists</h2>
+        {% else %}
+            <h2>Top 50 Rankings</h2>
+        {% endif %}
+        {{ top_rank_table }}
         <hr>
         
         <h2>Song Features</h2>

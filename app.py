@@ -833,6 +833,51 @@ def _cache_key_home():
 		ready = '0'
 	return f"home:{uid}:{ready}"
 
+def calculate_audio_features_stats(unique_songs_df):
+	"""
+	Calculate statistics about audio features availability in unique songs.
+	
+	Args:
+		unique_songs_df: DataFrame containing unique songs data
+		
+	Returns:
+		dict: Statistics about audio features availability
+	"""
+	# Define audio feature columns
+	audio_feature_cols = ['acousticness', 'danceability', 'energy', 'instrumentalness', 
+						 'key', 'liveness', 'loudness', 'mode', 'speechiness', 
+						 'tempo', 'valence']
+	
+	total_songs = len(unique_songs_df)
+	
+	# Count songs with audio features
+	songs_with_features = 0
+	songs_without_features = 0
+	
+	for _, row in unique_songs_df.iterrows():
+		has_features = False
+		for col in audio_feature_cols:
+			if col in row and pd.notna(row[col]):
+				has_features = True
+				break
+		
+		if has_features:
+			songs_with_features += 1
+		else:
+			songs_without_features += 1
+	
+	# Calculate percentages
+	features_percentage = (songs_with_features / total_songs * 100) if total_songs > 0 else 0
+	no_features_percentage = (songs_without_features / total_songs * 100) if total_songs > 0 else 0
+	
+	return {
+		'total_songs': total_songs,
+		'songs_with_features': songs_with_features,
+		'songs_without_features': songs_without_features,
+		'features_percentage': round(features_percentage, 1),
+		'no_features_percentage': round(no_features_percentage, 1)
+	}
+
 @app.route('/home')
 @login_required
 @cache.cached(timeout=60, key_prefix=_cache_key_home)  # Reduced cache timeout for better performance
@@ -862,6 +907,11 @@ def home():
 
 	all_songs_df = pd.read_json(all_songs_path, lines=True, compression='gzip')
 	unique_songs_df = pd.read_json(unique_songs_path, lines=True, compression='gzip')
+	
+	# Fix genres column before creating page objects
+	from visualization import fix_genres_column_standalone
+	all_songs_df = fix_genres_column_standalone(all_songs_df)
+	unique_songs_df = fix_genres_column_standalone(unique_songs_df)
 
 	# Load user metadata to get playlist_dict
 	with open(f'{user_path}user_meta.json', 'r', encoding='utf-8') as f:
@@ -877,6 +927,9 @@ def home():
 	last_added_playlist = home_page.load_last_added()
 	overall_data = home_page.load_totals()
 	first_times = home_page.load_first_times()
+	
+	# Calculate audio features statistics
+	audio_features_stats = calculate_audio_features_stats(unique_songs_df)
 
 	return render_template('home.html', collection=False,
 					   name=user['display_name'], today=str(
@@ -884,7 +937,8 @@ def home():
 					   on_this_date=on_this_date,
 					   full_timeline=full_timeline,
 					   last_added_playlist=last_added_playlist,
-					   overall_data=overall_data, first_times=first_times)
+					   overall_data=overall_data, first_times=first_times,
+					   audio_features_stats=audio_features_stats)
 
 # Download Data as CSV
 @app.route('/download-data')
@@ -978,6 +1032,11 @@ def currently_playing():
     all_songs_df = pd.read_json(f'{user_path}all_songs.ndjson.gz', lines=True, compression='gzip')
     unique_songs_df = pd.read_json(f'{user_path}unique_songs.ndjson.gz', lines=True, compression='gzip')
     
+    # Fix genres column before creating page objects
+    from visualization import fix_genres_column_standalone
+    all_songs_df = fix_genres_column_standalone(all_songs_df)
+    unique_songs_df = fix_genres_column_standalone(unique_songs_df)
+    
     # Get playlist info fresh (id -> name)
     id_to_name = {}
     try:
@@ -1006,33 +1065,73 @@ def currently_playing():
     song_in_library = True if len(unique_songs_df[(unique_songs_df['name'] == song) & (unique_songs_df['artist'] == artist)]) > 0 else False
     artist_in_library = True if len(unique_songs_df[unique_songs_df['artist'] == artist]) > 0 else False
     
+    # Initialize CurrentlyPlayingPage with dynamic fetching capabilities
+    page = CurrentlyPlayingPage(
+        song=song, 
+        artist=artist, 
+        playlist=playlist, 
+        all_songs_df=all_songs_df, 
+        unique_songs_df=unique_songs_df,
+        user_path=user_path,
+        spotify_client=user['spotify_client'],
+        song_id=song_id  # Pass the Spotify track ID
+    )
+    
+    # If song is not in library, try to fetch it dynamically
     if not song_in_library:
-        if artist_in_library:
-            return f'<h3>You are playing the song {song} by <a href="/artists/{artists_url}">{artist}</a> - but it\'s not in any of your created playlists :(</h3>' \
-                f'<h3>Start listening to any song from your playlists to see cool stats!</h3>'
+        if page.ensure_track_data_available():
+            # Reload the DataFrames to include the new track
+            all_songs_df = pd.read_json(all_songs_path, lines=True, compression='gzip')
+            unique_songs_df = pd.read_json(unique_songs_path, lines=True, compression='gzip')
+            
+            # Fix genres column after reloading
+            all_songs_df = fix_genres_column_standalone(all_songs_df)
+            unique_songs_df = fix_genres_column_standalone(unique_songs_df)
+            
+            # Update the page with new data
+            page = CurrentlyPlayingPage(
+                song=song, 
+                artist=artist, 
+                playlist=playlist, 
+                all_songs_df=all_songs_df, 
+                unique_songs_df=unique_songs_df,
+                user_path=user_path,
+                spotify_client=user['spotify_client'],
+                song_id=song_id  # Pass the Spotify track ID
+            )
         else:
-            return f'<h3>You are playing the song {song} by {artist} - but it\'s not in any of your created playlists :(</h3>' \
-                f'<h3>Start listening to any song from your playlists to see cool stats!</h3>' 
-    else:
-        page = CurrentlyPlayingPage(song, artist, playlist, all_songs_df, unique_songs_df)
+            # If dynamic fetch fails, show detailed error information
+            error_msg = page._dynamic_fetch_error or "Unknown error occurred during dynamic fetch"
+            print(f"Dynamic fetch failed: {error_msg}")
+            
+            # Show the old message with additional debug info
+            if artist_in_library:
+                return f'<h3>You are playing the song {song} by <a href="/artists/{artists_url}">{artist}</a> - but it\'s not in any of your created playlists :(</h3>' \
+                    f'<h3>Start listening to any song from your playlists to see cool stats!</h3>' \
+                    f'<p><small>Debug: Dynamic fetch failed - {error_msg}</small></p>'
+            else:
+                return f'<h3>You are playing the song {song} by {artist} - but it\'s not in any of your created playlists :(</h3>' \
+                    f'<h3>Start listening to any song from your playlists to see cool stats!</h3>' \
+                    f'<p><small>Debug: Dynamic fetch failed - {error_msg}</small></p>'
+    
+    # Generate charts for the song (whether it was in library originally or fetched dynamically)
+    top_rank_table = page.graph_top_rank_table()
+    song_features_radar = page.graph_song_features_vs_avg()
+    song_features_percentiles_bar = page.graph_song_percentiles_vs_avg()
+    playlist_date_gantt = page.graph_date_added_to_playlist()
+    playlist_timeline = page.graph_count_timeline()
+    artist_top_graphs = page.graph_all_artists()
+    artist_genres = page.graph_artist_genres()
+    most_common_artists_with_same_genres = page.graph_most_common_artists_with_same_genres() if playlist else None
+    genres_playlist_percentiles = page.graph_song_genres_vs_avg(playlist=True) if playlist else None
 
-        top_rank_table = page.graph_top_rank_table()
-        song_features_radar = page.graph_song_features_vs_avg()
-        song_features_percentiles_bar = page.graph_song_percentiles_vs_avg()
-        playlist_date_gantt = page.graph_date_added_to_playlist()
-        playlist_timeline = page.graph_count_timeline()
-        artist_top_graphs = page.graph_all_artists()
-        artist_genres = page.graph_artist_genres()
-        most_common_artists_with_same_genres = page.graph_most_common_artists_with_same_genres() if playlist else None
-        genres_playlist_percentiles = page.graph_song_genres_vs_avg(playlist=True) if playlist else None
-
-        return render_template('currently_playing.html', song=song, artist=artist, playlist=playlist,
-                                top_rank_table=top_rank_table,
-                                song_features_radar=song_features_radar, song_features_percentiles_bar=song_features_percentiles_bar,
-                                playlist_date_gantt=playlist_date_gantt, playlist_timeline=playlist_timeline,
-                                artist_top_graphs=artist_top_graphs,
-                                artist_genres=artist_genres, most_common_artists_with_same_genres=most_common_artists_with_same_genres, genres_playlist_percentiles=genres_playlist_percentiles,
-                                song_id=song_id, artists_url=artists_url, playlist_id=playlist_id if playlist else None)
+    return render_template('currently_playing.html', song=song, artist=artist, playlist=playlist,
+                            top_rank_table=top_rank_table,
+                            song_features_radar=song_features_radar, song_features_percentiles_bar=song_features_percentiles_bar,
+                            playlist_date_gantt=playlist_date_gantt, playlist_timeline=playlist_timeline,
+                            artist_top_graphs=artist_top_graphs,
+                            artist_genres=artist_genres, most_common_artists_with_same_genres=most_common_artists_with_same_genres, genres_playlist_percentiles=genres_playlist_percentiles,
+                            song_id=song_id, artists_url=artists_url, playlist_id=playlist_id if playlist else None)
 
 # About Me Page
 @app.route('/about-me')
@@ -1286,6 +1385,11 @@ def analyze_playlists(playlist_ids):
     # Load required data (NDJSON, gzipped)
     all_songs_df = pd.read_json(all_songs_path, lines=True, compression='gzip')
     unique_songs_df = pd.read_json(unique_songs_path, lines=True, compression='gzip')
+    
+    # Fix genres column before creating page objects
+    from visualization import fix_genres_column_standalone
+    all_songs_df = fix_genres_column_standalone(all_songs_df)
+    unique_songs_df = fix_genres_column_standalone(unique_songs_df)
 
     ids = playlist_ids.split('/')
     if len(ids) == 1:
@@ -1365,6 +1469,11 @@ def analyze_artists(artist_names):
     # Load required data (NDJSON, gzipped)
     all_songs_df = pd.read_json(all_songs_path, lines=True, compression='gzip')
     unique_songs_df = pd.read_json(unique_songs_path, lines=True, compression='gzip')
+    
+    # Fix genres column before creating page objects
+    from visualization import fix_genres_column_standalone
+    all_songs_df = fix_genres_column_standalone(all_songs_df)
+    unique_songs_df = fix_genres_column_standalone(unique_songs_df)
 
     # Get global artist averages from home page for consistency
     from visualization import HomePage
@@ -1423,6 +1532,11 @@ def analyze_songs(song_ids):
     # Load required data (NDJSON, gzipped)
     all_songs_df = pd.read_json(all_songs_path, lines=True, compression='gzip')
     unique_songs_df = pd.read_json(unique_songs_path, lines=True, compression='gzip')
+    
+    # Fix genres column before creating page objects
+    from visualization import fix_genres_column_standalone
+    all_songs_df = fix_genres_column_standalone(all_songs_df)
+    unique_songs_df = fix_genres_column_standalone(unique_songs_df)
 
     ids = song_ids.split('/')
     if len(ids) == 1:

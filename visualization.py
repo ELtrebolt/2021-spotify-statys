@@ -28,6 +28,9 @@ import gzip
 from flask import Markup
 import traceback
 import shutil
+import time
+import requests
+from typing import Dict, Any, Optional, Tuple
 
 # Constants -------------------------------------------------------------------
 
@@ -62,7 +65,15 @@ def _shorten_names(listy):
 def _h_bar(series, title=None, xaxis=None, yaxis=None, percents=False,
            long_names=False, hovertext=None, to_html=True, name=None, color=None, markup=True, fixHeight=False):
     if percents:
-        texty = [str(round(i, 2)) + '%' for i in series]
+        texty = []
+        for i in series:
+            try:
+                if i is not None and isinstance(i, (int, float)):
+                    texty.append(str(round(i, 2)) + '%')
+                else:
+                    texty.append(str(i) if i is not None else 'N/A')
+            except (TypeError, ValueError):
+                texty.append(str(i) if i is not None else 'N/A')
     else:
         texty = series
 
@@ -70,6 +81,7 @@ def _h_bar(series, title=None, xaxis=None, yaxis=None, percents=False,
         y_labels = _shorten_names(series.keys())
     else:
         y_labels = series.keys()
+
 
     fig = go.Bar(
         x=series,
@@ -148,7 +160,110 @@ def _boxplot(x_data, y_data, text, title=None, xaxis=None, yaxis=None, to_html=T
         return box
 
 
+def fix_genres_column_standalone(df):
+    """Standalone function to fix genres column - can be used outside of classes"""
+    if 'genres' in df.columns:
+        df['genres'] = df['genres'].apply(parse_genre_string_standalone)
+    return df
+
+def parse_genre_string_standalone(genre_value):
+    """Standalone function to parse genre from string representation back to list"""
+    # Handle pandas Series or arrays properly
+    if hasattr(genre_value, '__iter__') and not isinstance(genre_value, (str, list)):
+        # If it's a pandas Series or array, take the first value
+        if len(genre_value) > 0:
+            genre_value = genre_value.iloc[0] if hasattr(genre_value, 'iloc') else genre_value[0]
+        else:
+            return [["N/A"]]
+    
+    # Check for None or NaN values
+    if genre_value is None:
+        return [["N/A"]]
+    
+    # Handle pandas NaN values
+    try:
+        if pd.isna(genre_value):
+            return [["N/A"]]
+    except:
+        pass
+    
+    if isinstance(genre_value, list):
+        # Clean the list if it contains strings with quotes/brackets
+        cleaned_list = []
+        for item in genre_value:
+            if isinstance(item, list):
+                # Clean nested list
+                cleaned_nested = []
+                for nested_item in item:
+                    if isinstance(nested_item, str):
+                        clean_item = nested_item.strip().strip('"\'[]')
+                        if clean_item:
+                            cleaned_nested.append(clean_item)
+                if cleaned_nested:
+                    cleaned_list.append(cleaned_nested)
+                else:
+                    cleaned_list.append(["N/A"])
+            elif isinstance(item, str):
+                # Clean string item
+                clean_item = item.strip().strip('"\'[]')
+                if clean_item:
+                    cleaned_list.append([clean_item])
+                else:
+                    cleaned_list.append(["N/A"])
+            else:
+                cleaned_list.append(["N/A"])
+        return cleaned_list if cleaned_list else [["N/A"]]
+    
+    if isinstance(genre_value, str):
+        # Handle JSON-like strings
+        if genre_value.startswith('[') and genre_value.endswith(']'):
+            try:
+                import json
+                parsed = json.loads(genre_value)
+                if isinstance(parsed, list):
+                    # Clean the parsed list
+                    cleaned_list = []
+                    for item in parsed:
+                        if isinstance(item, list):
+                            cleaned_nested = []
+                            for nested_item in item:
+                                if isinstance(nested_item, str):
+                                    clean_item = nested_item.strip().strip('"\'[]')
+                                    if clean_item:
+                                        cleaned_nested.append(clean_item)
+                            if cleaned_nested:
+                                cleaned_list.append(cleaned_nested)
+                            else:
+                                cleaned_list.append(["N/A"])
+                        elif isinstance(item, str):
+                            clean_item = item.strip().strip('"\'[]')
+                            if clean_item:
+                                cleaned_list.append([clean_item])
+                            else:
+                                cleaned_list.append(["N/A"])
+                    return cleaned_list if cleaned_list else [["N/A"]]
+            except:
+                pass
+        
+        # Handle comma-separated strings
+        if ',' in genre_value:
+            genres = [g.strip().strip('"\'[]') for g in genre_value.split(',') if g.strip()]
+            return [genres] if genres else [["N/A"]]
+        
+        # Single genre
+        if genre_value.strip():
+            clean_genre = genre_value.strip().strip('"\'[]')
+            if clean_genre:
+                return [[clean_genre]]
+    
+    return [["N/A"]]
+
 def _venn_diagram_artist_genres(artists, genres):
+    # Safety check: ensure we have valid data
+    if not artists or not genres or len(artists) != len(genres):
+        print(f"Warning: Invalid data for Venn diagram - artists: {artists}, genres: {genres}")
+        return None
+        
     if len(genres) == 2:
         left = set(genres[0])
         right = set(genres[1])
@@ -166,8 +281,10 @@ def _venn_diagram_artist_genres(artists, genres):
                 fig.get_label_by_id(i).set_text('\n'.join(j))
             except:
                 pass
-        for text in fig.set_labels:
-            text.set_fontsize(14)
+        # Safety check: ensure we have labels before trying to access them
+        if hasattr(fig, 'set_labels') and fig.set_labels:
+            for text in fig.set_labels:
+                text.set_fontsize(14)
 
         # Save it to a temporary buffer
         plt.savefig(img, format='png')
@@ -540,17 +657,31 @@ def shared_graph_count_timelines(all_songs_df, title, playlists=None, artists=No
         )
     )
 
-    # Add vertical lines for current date
+    # Add vertical lines for today's anniversary dates
     first_date = all_songs_df['date_added'].sort_values(
         ascending=True).iloc[0]
-    first_year = str(first_date)[:4]
-    current_year = str(today.date())[:4]
-    today = str(today.date())[5:].split('-')
-    month = int(today[0])
-    day = int(today[1])
-    for year in range(int(first_year), int(current_year)+1):
-        fig.add_vline(x=datetime.datetime(year, month, day), line_width=3,
-                      line_dash="dash", line_color="green")
+    first_year = int(str(first_date)[:4])
+    current_year = int(str(today.date())[:4])
+    
+    # Get today's month and day
+    today_month = today.month
+    today_day = today.day
+    
+    # Add vertical line for each year from first year to current year
+    for year in range(first_year, current_year + 1):
+        # Create the anniversary date for this year
+        try:
+            anniversary_date = datetime.datetime(year, today_month, today_day)
+            
+            fig.add_vline(
+                x=anniversary_date, 
+                line_width=3,
+                line_dash="dash", 
+                line_color="green"
+            )
+        except ValueError:
+            # Skip invalid dates (e.g., February 29 in non-leap years)
+            continue
     
     # Add song-specific vlines if requested (these come from shared_graph_count_timeline calls)
     # We need to track these separately for the visibility algorithm
@@ -921,11 +1052,15 @@ class OptimizedPageBase:
         # Optimize date operations
         if 'date_added' in self._all_songs_df.columns:
             # Convert dates once and store
-            self._all_songs_df['date_added_parsed'] = pd.to_datetime(self._all_songs_df['date_added'], errors='coerce')
+            self._all_songs_df['date_added_parsed'] = pd.to_datetime(self._all_songs_df['date_added'], format='%Y-%m-%d', errors='coerce')
             
-            # Only process unique_songs_df if it has data and the required column
-            if len(self._unique_songs_df) > 0 and 'date_added' in self._unique_songs_df.columns:
-                self._unique_songs_df['date_added_parsed'] = pd.to_datetime(self._unique_songs_df['date_added'], errors='coerce')
+                    # Only process unique_songs_df if it has data and the required column
+        if len(self._unique_songs_df) > 0 and 'date_added' in self._unique_songs_df.columns:
+            self._unique_songs_df['date_added_parsed'] = pd.to_datetime(self._unique_songs_df['date_added'], format='%Y-%m-%d', errors='coerce')
+        
+        # Fix genres column - convert string representations back to lists
+        self._all_songs_df = self._fix_genres_column(self._all_songs_df)
+        self._unique_songs_df = self._fix_genres_column(self._unique_songs_df)
     
     def load_component_progressively(self, component_name, loader_func, *args, **kwargs):
         """
@@ -983,6 +1118,155 @@ class OptimizedPageBase:
             # Fallback to string matching
             return self._all_songs_df[self._all_songs_df[date_column].str.contains(target_date, na=False)]
     
+    def _fix_genres_column(self, df):
+        """Convert genre strings back to lists after loading from NDJSON"""
+        if 'genres' in df.columns:
+            df['genres'] = df['genres'].apply(self._parse_genre_string)
+        return df
+
+    def _parse_genre_string(self, genre_value):
+        """Parse genre from string representation back to list"""
+        # Handle pandas Series or arrays properly
+        if hasattr(genre_value, '__iter__') and not isinstance(genre_value, (str, list)):
+            # If it's a pandas Series or array, take the first value
+            if len(genre_value) > 0:
+                genre_value = genre_value.iloc[0] if hasattr(genre_value, 'iloc') else genre_value[0]
+            else:
+                return [["N/A"]]
+        
+        # Check for None or NaN values
+        if genre_value is None:
+            return [["N/A"]]
+        
+        # Handle pandas NaN values
+        try:
+            if pd.isna(genre_value):
+                return [["N/A"]]
+        except:
+            pass
+        
+        if isinstance(genre_value, list):
+            # Check if this is already a proper list of genres (not nested)
+            # If all items are strings, return as-is (already properly formatted)
+            if all(isinstance(item, str) for item in genre_value):
+                # Clean string items
+                cleaned_genres = []
+                for item in genre_value:
+                    clean_item = item.strip().strip('"\'[]')
+                    if clean_item and clean_item != 'N/A':
+                        cleaned_genres.append(clean_item)
+                return cleaned_genres if cleaned_genres else ['N/A']
+            
+            # Handle nested list structure (legacy format)
+            cleaned_list = []
+            for item in genre_value:
+                if isinstance(item, list):
+                    # Clean nested list
+                    cleaned_nested = []
+                    for nested_item in item:
+                        if isinstance(nested_item, str):
+                            clean_item = nested_item.strip().strip('"\'[]')
+                            if clean_item:
+                                cleaned_nested.append(clean_item)
+                    if cleaned_nested:
+                        cleaned_list.append(cleaned_nested)
+                    else:
+                        cleaned_list.append(["N/A"])
+                elif isinstance(item, str):
+                    # Clean string item
+                    clean_item = item.strip().strip('"\'[]')
+                    if clean_item:
+                        cleaned_list.append([clean_item])
+                    else:
+                        cleaned_list.append(["N/A"])
+                else:
+                    cleaned_list.append(["N/A"])
+            return cleaned_list if cleaned_list else [["N/A"]]
+        
+        if isinstance(genre_value, str):
+            # Handle JSON-like strings
+            if genre_value.startswith('[') and genre_value.endswith(']'):
+                try:
+                    import json
+                    parsed = json.loads(genre_value)
+                    if isinstance(parsed, list):
+                        # Clean the parsed list
+                        cleaned_list = []
+                        for item in parsed:
+                            if isinstance(item, list):
+                                cleaned_nested = []
+                                for nested_item in item:
+                                    if isinstance(nested_item, str):
+                                        clean_item = nested_item.strip().strip('"\'[]')
+                                        if clean_item:
+                                            cleaned_nested.append(clean_item)
+                                if cleaned_nested:
+                                    cleaned_list.append(cleaned_nested)
+                                else:
+                                    cleaned_list.append(["N/A"])
+                            elif isinstance(item, str):
+                                clean_item = item.strip().strip('"\'[]')
+                                if clean_item:
+                                    cleaned_list.append([clean_item])
+                                else:
+                                    cleaned_list.append(["N/A"])
+                        return cleaned_list if cleaned_list else [["N/A"]]
+                except:
+                    pass
+            
+            # Handle comma-separated strings
+            if ',' in genre_value:
+                genres = [g.strip().strip('"\'[]') for g in genre_value.split(',') if g.strip()]
+                return [genres] if genres else [["N/A"]]
+            
+            # Single genre
+            if genre_value.strip():
+                clean_genre = genre_value.strip().strip('"\'[]')
+                if clean_genre:
+                    return [[clean_genre]]
+        
+        return [["N/A"]]
+    
+    def _fix_playlist_column(self, df):
+        """Convert playlist strings back to lists after loading from NDJSON"""
+        if 'playlist' in df.columns:
+            df['playlist'] = df['playlist'].apply(self._parse_playlist_string)
+        return df
+    
+    def _parse_playlist_string(self, playlist_value):
+        """Parse playlist from string representation back to list"""
+        # Handle pandas Series or arrays properly
+        if hasattr(playlist_value, '__iter__') and not isinstance(playlist_value, (str, list)):
+            # If it's a pandas Series or array, take the first value
+            if len(playlist_value) > 0:
+                playlist_value = playlist_value.iloc[0] if hasattr(playlist_value, 'iloc') else playlist_value[0]
+            else:
+                return []
+        
+        # Check for None or NaN values
+        if playlist_value is None or (hasattr(playlist_value, '__len__') and len(playlist_value) == 0):
+            return []
+        
+        # If it's already a list, return it
+        if isinstance(playlist_value, list):
+            return playlist_value
+        
+        # If it's a string, try to parse it
+        if isinstance(playlist_value, str):
+            import ast
+            try:
+                return ast.literal_eval(playlist_value)
+            except:
+                # If parsing fails, treat as a single playlist name
+                return [playlist_value]
+        
+        # For any other type, try to convert to string and parse
+        try:
+            import ast
+            return ast.literal_eval(str(playlist_value))
+        except:
+            return [str(playlist_value)]
+
     def optimized_groupby_operation(self, df, group_column, agg_columns, agg_functions):
         """
         Optimized groupby operations with vectorized aggregations.
@@ -1002,40 +1286,1038 @@ class OptimizedPageBase:
         return result
 
 
+# Dynamic Track Fetching Classes ----------------------------------------------------------------------------------------------
+
+class DynamicTrackFetcher:
+    """
+    Fetches missing track data from Spotify and ReccoBeats APIs.
+    Implements retry logic, error handling, and data validation.
+    """
+    
+    def __init__(self, spotify_client, user_path: str):
+        self.spotify_client = spotify_client
+        self.user_path = user_path
+        
+        # API configuration
+        self.spotify_base_url = "https://api.spotify.com/v1"
+        self.reccobeats_base_url = "https://api.reccobeats.com/v1"
+        
+        # Rate limiting configuration
+        self.spotify_rate_limit = 100  # requests per second
+        self.reccobeats_rate_limit = 50  # requests per minute
+        self.max_retries = 3
+        
+        # Session for HTTP requests
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Spotify-Stats-App/1.0'
+        })
+    
+    def fetch_track_data(self, spotify_track_id: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """
+        Fetch complete track data from both Spotify and ReccoBeats APIs.
+        
+        Args:
+            spotify_track_id: Spotify track ID
+            
+        Returns:
+            Tuple of (spotify_data, reccobeats_data)
+        """
+        spotify_data = self._fetch_spotify_track(spotify_track_id)
+        reccobeats_data = self._fetch_reccobeats_features(spotify_track_id)
+        
+        return spotify_data, reccobeats_data
+    
+    def _fetch_spotify_track(self, track_id: str) -> Dict[str, Any]:
+        """Fetch track metadata from Spotify API with retry logic."""
+        endpoint = f"{self.spotify_base_url}/tracks/{track_id}"
+        
+        for attempt in range(self.max_retries):
+            try:
+                # Use Spotify client if available, otherwise make direct HTTP request
+                if hasattr(self.spotify_client, 'track'):
+                    response = self.spotify_client.track(track_id)
+                    return response
+                else:
+                    # Fallback to direct HTTP request
+                    response = self.session.get(endpoint, timeout=10)
+                    response.raise_for_status()
+                    return response.json()
+                    
+            except Exception as e:
+                if attempt < self.max_retries - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    print(f"Failed to fetch Spotify track data after {self.max_retries} attempts: {e}")
+                    return {}
+    
+    def _fetch_reccobeats_features(self, spotify_track_id: str) -> Dict[str, Any]:
+        """Fetch audio features from ReccoBeats API with retry logic."""
+        # The ReccoBeats API works differently - we need to:
+        # 1. First get all available audio features
+        # 2. Then get track details to map ReccoBeats IDs to Spotify IDs
+        # 3. Find the matching track and extract its features
+        
+        try:
+            # Step 1: Get audio features for the specific Spotify track ID
+            features_endpoint = f"{self.reccobeats_base_url}/audio-features"
+            features_params = {"ids": spotify_track_id}
+            
+            response = self.session.get(features_endpoint, params=features_params, timeout=15)
+            response.raise_for_status()
+            features_data = response.json()
+            
+            if not features_data or 'content' not in features_data:
+                return {}
+            
+            content_data = features_data['content']
+            if not content_data:
+                return {}
+            
+            # Step 2: Get track details to map ReccoBeats IDs to Spotify IDs
+            track_endpoint = f"{self.reccobeats_base_url}/track"
+            
+            # Collect all ReccoBeats IDs from the features data
+            reccobeats_ids = []
+            audio_features_map = {}
+            
+            for track_data in content_data:
+                if 'id' in track_data:
+                    reccobeats_id = track_data['id']
+                    reccobeats_ids.append(reccobeats_id)
+                    
+                    # Store audio features for this ReccoBeats ID
+                    audio_features_map[reccobeats_id] = {}
+                    for col in ['danceability', 'energy', 'instrumentalness', 'key', 'liveness', 
+                               'loudness', 'mode', 'speechiness', 'tempo', 'valence']:
+                        if col in track_data:
+                            audio_features_map[reccobeats_id][col] = track_data[col]
+            
+            if not reccobeats_ids:
+                return {}
+            
+            # Get track details for all ReccoBeats IDs
+            track_ids_param = ",".join(reccobeats_ids)
+            track_params = {"ids": track_ids_param}
+            
+            response = self.session.get(track_endpoint, params=track_params, timeout=15)
+            response.raise_for_status()
+            track_data = response.json()
+            
+            if not track_data or 'content' not in track_data:
+                return {}
+            
+            track_content = track_data['content']
+            
+            # Step 3: Find the track that matches our Spotify ID
+            for track in track_content:
+                if 'href' in track and 'spotify.com/track/' in track['href']:
+                    # Extract Spotify ID from href
+                    spotify_id = track['href'].split('/track/')[-1].split('?')[0]
+                    if spotify_id == spotify_track_id:
+                        reccobeats_id = track['id']
+                        
+                        # Return the audio features for this track
+                        if reccobeats_id in audio_features_map:
+                            features = audio_features_map[reccobeats_id].copy()
+                            features['reccobeats_id'] = reccobeats_id
+                            return features
+            
+            return {}
+            
+        except Exception as e:
+            print(f"Error fetching ReccoBeats features: {e}")
+            return {}
+    
+    def validate_track_data(self, spotify_data: Dict[str, Any], reccobeats_data: Dict[str, Any]) -> bool:
+        """Validate that fetched data meets requirements for database insertion."""
+        if not spotify_data:
+            return False
+        
+        # Check required Spotify fields
+        required_spotify_fields = ['id', 'name', 'artists', 'album', 'duration_ms', 'popularity']
+        for field in required_spotify_fields:
+            if field not in spotify_data:
+                print(f"Missing required Spotify field: {field}")
+                return False
+        
+        # Check that we have at least some audio features
+        if not reccobeats_data:
+            # Don't return False here - we can still proceed with basic track info
+            pass
+        
+        # Check required audio feature fields (only if we have ReccoBeats data)
+        if reccobeats_data:
+            required_audio_fields = ['danceability', 'energy', 'valence']
+            audio_features_available = any(field in reccobeats_data for field in required_audio_fields)
+            if not audio_features_available:
+                # Still proceed - we have Spotify data
+                pass
+        
+        return True
+    
+    def process_track_data(self, spotify_data: Dict[str, Any], reccobeats_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Process and format fetched data for database insertion."""
+        processed_data = {
+            'id': spotify_data['id'],
+            'name': spotify_data['name'],
+            'artist': ', '.join([artist['name'] for artist in spotify_data['artists']]),
+            'album': spotify_data['album']['name'],
+            'duration': spotify_data['duration_ms'] / 1000,  # Convert to seconds
+            'popularity': spotify_data['popularity'],
+            'explicit': spotify_data.get('explicit', False),
+            'date_added': datetime.datetime.now().strftime('%Y-%m-%d'),
+            'playlist': ['Currently Playing'],  # Default playlist
+            'genres': []  # Will be populated later if needed
+        }
+        
+        # Add audio features from ReccoBeats (if available)
+        if reccobeats_data:
+            audio_feature_fields = [
+                'danceability', 'energy', 'instrumentalness', 'key', 'liveness',
+                'loudness', 'mode', 'speechiness', 'tempo', 'valence'
+            ]
+            
+            for field in audio_feature_fields:
+                if field in reccobeats_data:
+                    processed_data[field] = reccobeats_data[field]
+            
+            # Add ReccoBeats ID if available
+            if 'reccobeats_id' in reccobeats_data:
+                processed_data['reccobeats_id'] = reccobeats_data['reccobeats_id']
+        else:
+            # If no ReccoBeats data, we'll still have basic track info
+            pass
+        
+        return processed_data
+
+
+class TrackDataEnricher:
+    """
+    Enriches track data with percentile calculations and updates the database.
+    """
+    
+    def __init__(self, user_path: str):
+        self.user_path = user_path
+        self.unique_songs_path = f'{user_path}unique_songs.ndjson.gz'
+    
+    def add_track_and_recalculate_percentiles(self, new_track_data: Dict[str, Any]) -> bool:
+        """
+        Add new track to database and recalculate percentiles for all tracks.
+        
+        Args:
+            new_track_data: Processed track data from DynamicTrackFetcher
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Load existing data
+            if os.path.exists(self.unique_songs_path):
+                try:
+                    existing_df = pd.read_json(self.unique_songs_path, lines=True, compression='gzip')
+                except Exception:
+                    # If reading fails, start with empty DataFrame
+                    existing_df = pd.DataFrame()
+            else:
+                existing_df = pd.DataFrame()
+            
+            # Add new track
+            new_track_df = pd.DataFrame([new_track_data])
+            updated_df = pd.concat([existing_df, new_track_df], ignore_index=True)
+            
+            # Recalculate percentiles for all tracks
+            updated_df = self._calculate_percentiles(updated_df)
+            
+            # Save updated data
+            self._save_updated_data(updated_df)
+            
+            return True
+            
+        except Exception as e:
+            print(f"Error adding track and recalculating percentiles: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
+    def _calculate_percentiles(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Calculate percentiles for all numeric columns."""
+        # Define columns that should have percentiles calculated
+        percentile_cols = ['popularity', 'danceability', 'energy', 'speechiness', 
+                          'acousticness', 'instrumentalness', 'liveness', 'valence', 
+                          'duration', 'tempo', 'loudness']
+        
+        # Calculate percentiles for each column
+        for col in percentile_cols:
+            if col in df.columns and not df[col].isna().all():
+                # Vectorized percentile calculation
+                ranks = df[col].rank(method='max')
+                df[f'{col}_percentile'] = 100.0 * (ranks - 1) / (len(df) - 1)
+        
+        return df
+    
+    def _save_updated_data(self, df: pd.DataFrame) -> None:
+        """Save updated data using atomic write operations."""
+        try:
+            from SetupData import SetupData  # Import here to avoid circular imports
+            
+            setup_data = SetupData(self.user_path)
+            setup_data._atomic_gzip_ndjson_write(self.unique_songs_path, df)
+        except Exception as e:
+            # Fallback to direct pandas save if SetupData import fails
+            try:
+                # Ensure the DataFrame is properly formatted for JSON export
+                df_clean = df.copy()
+                # Convert any problematic data types
+                for col in df_clean.columns:
+                    if df_clean[col].dtype == 'object':
+                        df_clean[col] = df_clean[col].astype(str)
+                
+                df_clean.to_json(self.unique_songs_path, orient='records', lines=True, compression='gzip')
+            except Exception as fallback_error:
+                print(f"Fallback save also failed: {fallback_error}")
+                raise
+
+
 # Currently Playing Page ----------------------------------------------------------------------------------------------
 class CurrentlyPlayingPage():
-    def __init__(self, song, artist, playlist, all_songs_df, unique_songs_df):
+    def __init__(self, song, artist, playlist, all_songs_df, unique_songs_df, user_path=None, spotify_client=None, song_id=None):
         self._song = song
         self._artist = artist
         self._playlist = playlist
+        self._user_path = user_path
+        self._spotify_client = spotify_client
+        self._song_id = song_id  # Store the Spotify track ID
 
         self._all_songs_df = pd.DataFrame(all_songs_df)
         self._unique_songs_df = pd.DataFrame(unique_songs_df)
+        
+        # Fix genres column - convert string representations back to lists
+        self._all_songs_df = self._fix_genres_column(self._all_songs_df)
+        self._unique_songs_df = self._fix_genres_column(self._unique_songs_df)
 
-        song_df = self._unique_songs_df[self._unique_songs_df['artist'] == artist]
+        # Check if song exists in database
+        # Use flexible matching for artists to handle multiple artists properly
+        def artist_match(row_artist, target_artist):
+            """Check if the target artist matches the row artist, handling multiple artists"""
+            if row_artist == target_artist:
+                return True
+            
+            # Split both into individual artists and compare sets
+            row_artists = set([a.strip() for a in row_artist.split(',')])
+            target_artists = set([a.strip() for a in target_artist.split(',')])
+            
+            # Check if all target artists are present in row artists
+            return target_artists.issubset(row_artists)
+        
+        song_df = self._unique_songs_df[self._unique_songs_df['artist'].apply(lambda x: artist_match(x, artist))]
         self._song_df = song_df[song_df['name'] == song]
+        
+        # Track if we need to fetch data dynamically
+        self._needs_dynamic_fetch = len(self._song_df.index) == 0
+        self._dynamic_fetch_completed = False
+        self._dynamic_fetch_error = None
+        
 
-        # Genres may be missing if Setup 2 not completed; guard accordingly
-        has_genres_col = 'genres' in self._song_df.columns
-        if len(self._song_df.index) > 0 and has_genres_col:
-            try:
-                self._artist_genres = self._song_df.iloc[0]['genres']
-                self._song_genres = list({j for i in self._artist_genres for j in i})
-            except Exception:
-                self._artist_genres = []
-                self._song_genres = None
+        # Process genres for each individual artist
+        artist_names = [name.strip() for name in self._artist.split(',')]
+        self._artist_genres = []
+        all_genres = []
+        
+        for artist_name in artist_names:
+            # Look up this specific artist in the database
+            artist_songs = self._unique_songs_df[self._unique_songs_df['artist'].apply(lambda x: artist_name in x.split(', '))]
+            
+            if len(artist_songs.index) > 0 and 'genres' in artist_songs.columns:
+                # Get the first song for this artist
+                row = artist_songs.iloc[0]
+                raw_genres = row['genres']
+                
+                # Find the index of this artist in the song's artist list
+                song_artists = [a.strip() for a in row['artist'].split(',')]
+                try:
+                    artist_index = song_artists.index(artist_name)
+                except ValueError:
+                    artist_index = 0  # Fallback to first artist
+                
+                # Get genres for this specific artist
+                if isinstance(raw_genres, list) and len(raw_genres) > artist_index:
+                    artist_genres = raw_genres[artist_index]
+                    if isinstance(artist_genres, list) and artist_genres != ["N/A"]:
+                        # Clean each genre string
+                        cleaned_artist_genres = []
+                        for genre in artist_genres:
+                            if isinstance(genre, str):
+                                clean_genre = genre.strip().strip('"\'[]')
+                                if clean_genre:
+                                    cleaned_artist_genres.append(clean_genre)
+                        if cleaned_artist_genres:
+                            self._artist_genres.append(cleaned_artist_genres)
+                            all_genres.extend(cleaned_artist_genres)
+                        else:
+                            self._artist_genres.append(["N/A"])
+                    else:
+                        self._artist_genres.append(["N/A"])
+                else:
+                    self._artist_genres.append(["N/A"])
+            else:
+                self._artist_genres.append(["N/A"])
+        
+        # Flatten all genres for song_genres (used in other methods)
+        if all_genres:
+            self._song_genres = list(set(all_genres))  # Remove duplicates
+        else:
+            self._song_genres = ["N/A"]
+        
+        # Note: _clean_rank_columns() will be called after track data is available
+    
+    def _clean_rank_columns(self):
+        """Clean rank columns by replacing 'nan' values with 'N/A' for consistency."""
+        try:
+            # Check if we have rank columns in the song data
+            rank_columns = ['songs_short_rank', 'songs_med_rank', 'songs_long_rank']
+            for col in rank_columns:
+                if col in self._song_df.columns:
+                    # Only replace actual NaN/None values, not valid rank numbers
+                    # Check if the value is actually NaN/None before replacing
+                    mask = (self._song_df[col].isna() | 
+                           (self._song_df[col] == 'nan') | 
+                           (self._song_df[col] == 'None') | 
+                           (self._song_df[col] == None))
+                    
+                    # Only replace the NaN values, keep valid rank numbers
+                    self._song_df.loc[mask, col] = 'N/A'
+        except Exception as e:
+            print(f"Error cleaning rank columns: {e}")
+    
+    def ensure_track_data_available(self) -> bool:
+        """
+        Ensure track data is available, fetching it dynamically if needed.
+        Returns True if data is available, False otherwise.
+        """
+        if not self._needs_dynamic_fetch:
+            return True
+        
+        if self._dynamic_fetch_completed:
+            return True
+        
+        # Check each required parameter individually
+        missing_params = []
+        if not self._user_path:
+            missing_params.append("user_path")
+        if not self._spotify_client:
+            missing_params.append("spotify_client")
+        
+        if missing_params:
+            self._dynamic_fetch_error = f"Missing configuration for dynamic track fetching: {', '.join(missing_params)}"
+            return False
+        
+        try:
+            # Use the stored Spotify track ID
+            track_id = self._song_id
+            
+            if not track_id:
+                self._dynamic_fetch_error = "Could not determine Spotify track ID"
+                return False
+            
+            # Initialize dynamic track fetcher
+            fetcher = DynamicTrackFetcher(self._spotify_client, self._user_path)
+            
+            # Fetch track data
+            spotify_data, reccobeats_data = fetcher.fetch_track_data(track_id)
+            
+            # Validate data
+            if not fetcher.validate_track_data(spotify_data, reccobeats_data):
+                self._dynamic_fetch_error = "Fetched track data validation failed"
+                return False
+            
+            # Process data
+            processed_data = fetcher.process_track_data(spotify_data, reccobeats_data)
+            
+            # Add to database and recalculate percentiles
+            enricher = TrackDataEnricher(self._user_path)
+            if enricher.add_track_and_recalculate_percentiles(processed_data):
+                # Reload the song data from the updated database
+                self._reload_song_data(processed_data)
+                self._dynamic_fetch_completed = True
+                return True
+            else:
+                self._dynamic_fetch_error = "Failed to add track to database"
+                return False
+                
+        except Exception as e:
+            self._dynamic_fetch_error = f"Dynamic track fetching failed: {str(e)}"
+            return False
+    
+    def _reload_song_data(self, new_track_data: Dict[str, Any]) -> None:
+        """Reload song data after dynamic fetching."""
+        # Create a new song DataFrame with the fetched data
+        new_song_df = pd.DataFrame([new_track_data])
+        
+        # Update the song_df reference
+        self._song_df = new_song_df
+        
+        # Update the unique_songs_df to include the new track
+        self._unique_songs_df = pd.concat([self._unique_songs_df, new_song_df], ignore_index=True)
+        
+        # Update genres if available
+        if 'genres' in new_track_data and new_track_data['genres']:
+            self._artist_genres = new_track_data['genres']
+            self._song_genres = list({j for i in self._artist_genres for j in i})
         else:
             self._artist_genres = []
             self._song_genres = None
 
+    def _calculate_playlist_similarity_knn(self, song_features, k=5):
+        """
+        Calculate the top k most similar playlists using KNN based on audio features.
+        
+        Args:
+            song_features: Dictionary of audio features for the current song
+            k: Number of most similar playlists to return
+            
+        Returns:
+            List of tuples (playlist_name, similarity_score, playlist_features)
+        """
+        try:
+            # Get all unique playlists (excluding the current song's playlist if it exists)
+            all_playlists = self._all_songs_df['playlist'].unique()
+            
+            # Calculate median audio features for each playlist
+            playlist_features = {}
+            available_features = []
+            
+            # Determine which features are available in the song data
+            for feature in FEATURE_COLS:
+                if feature in song_features and not pd.isna(song_features[feature]):
+                    available_features.append(feature)
+            
+            if not available_features:
+                return []
+            
+            # Calculate median features for each playlist
+            for playlist in all_playlists:
+                playlist_df = self._all_songs_df[self._all_songs_df['playlist'] == playlist]
+                
+                # Only include playlists that have audio features data
+                if len(playlist_df) > 0:
+                    playlist_median = {}
+                    has_features = False
+                    
+                    for feature in available_features:
+                        if feature in playlist_df.columns and not playlist_df[feature].isna().all():
+                            # Calculate median for this feature across all songs in the playlist
+                            median_value = playlist_df[feature].median()
+                            playlist_median[feature] = median_value
+                            has_features = True
+                        else:
+                            playlist_median[feature] = median_value = 0.0
+                    
+                    if has_features:
+                        playlist_features[playlist] = playlist_median
+            
+            if not playlist_features:
+                return []
+            
+            # Calculate Euclidean distance between song features and each playlist
+            similarities = []
+            
+            for playlist_name, playlist_feature_dict in playlist_features.items():
+                # Calculate Euclidean distance
+                distance = 0
+                for feature in available_features:
+                    song_val = song_features[feature]
+                    playlist_val = playlist_feature_dict[feature]
+                    
+                    # Normalize popularity to 0-1 scale for fair comparison
+                    if feature == 'popularity':
+                        song_val = song_val / 100.0
+                        playlist_val = playlist_val / 100.0
+                    
+                    # Calculate squared difference
+                    diff = song_val - playlist_val
+                    distance += diff * diff
+                
+                # Convert distance to similarity score (lower distance = higher similarity)
+                similarity_score = 1.0 / (1.0 + distance)
+                similarities.append((playlist_name, similarity_score, playlist_feature_dict))
+            
+            # Sort by similarity score (descending) and return top k
+            similarities.sort(key=lambda x: x[1], reverse=True)
+            return similarities[:k]
+            
+        except Exception as e:
+            print(f"Error calculating playlist similarity: {e}")
+            return []
+    
+    def _create_closest_playlists_chart(self, song_features, similar_playlists):
+        """
+        Create a vertical bar chart showing audio features comparison between
+        the current song and the most similar playlists.
+        
+        Args:
+            song_features: Dictionary of audio features for the current song
+            similar_playlists: List of similar playlists from KNN calculation
+            
+        Returns:
+            Plotly figure as HTML markup
+        """
+        try:
+            # Determine which features are available
+            available_features = []
+            for feature in FEATURE_COLS:
+                if feature in song_features and not pd.isna(song_features[feature]):
+                    available_features.append(feature)
+            
+            if not available_features:
+                return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">No audio features available for comparison</div>')
+            
+            # Create the bar chart
+            fig = go.Figure()
+            
+            # Add trace for the current song
+            song_values = []
+            for feature in available_features:
+                val = song_features[feature]
+                # Normalize popularity to 0-1 scale
+                if feature == 'popularity':
+                    val = val / 100.0
+                song_values.append(round(val, 3))
+            
+            fig.add_trace(go.Bar(
+                name=self._song,
+                x=available_features,
+                y=song_values,
+                text=song_values,
+                textposition='auto',
+                marker_color='#1DB954',  # Spotify green
+                hovertemplate='<b>%{fullData.name}</b><br>' +
+                            'Feature: %{x}<br>' +
+                            'Value: %{y}<br>' +
+                            '<extra></extra>'
+            ))
+            
+            # Add traces for similar playlists
+            for i, (playlist_name, similarity_score, playlist_features) in enumerate(similar_playlists):
+                playlist_values = []
+                for feature in available_features:
+                    val = playlist_features[feature]
+                    # Normalize popularity to 0-1 scale
+                    if feature == 'popularity':
+                        val = val / 100.0
+                    playlist_values.append(round(val, 3))
+                
+                color = COLORS[i % len(COLORS)]
+                fig.add_trace(go.Bar(
+                    name=f"{playlist_name} (Similarity: {similarity_score:.3f})",
+                    x=available_features,
+                    y=playlist_values,
+                    text=playlist_values,
+                    textposition='auto',
+                    marker_color=color,
+                    hovertemplate='<b>%{fullData.name}</b><br>' +
+                                'Feature: %{x}<br>' +
+                                'Value: %{y}<br>' +
+                                '<extra></extra>'
+                ))
+            
+            # Update layout
+            fig.update_layout(
+                title=f'Closest Fitting Playlists - Audio Features Comparison',
+                xaxis_title='Audio Features',
+                yaxis_title='Feature Values (Normalized)',
+                barmode='group',
+                showlegend=True,
+                height=600,
+                legend=dict(
+                    orientation="h",
+                    yanchor="bottom",
+                    y=1.02,
+                    xanchor="right",
+                    x=1
+                )
+            )
+            
+            # Add a special marker to help the template detect this is the Closest Fitting Playlists chart
+            html_content = fig.to_html(full_html=False)
+            # Add a hidden marker that the template can use to detect this chart type
+            marker = '<!-- CLOSEST_FITTING_PLAYLISTS_CHART -->'
+            return Markup(marker + html_content)
+            
+        except Exception as e:
+            print(f"Error creating closest playlists chart: {e}")
+            return Markup(f'<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Error creating chart: {str(e)}</div>')
+
+    def _show_closest_fitting_playlists(self):
+        """
+        Show the "Closest Fitting Playlists" section when the song doesn't exist
+        in the database or doesn't have rank data.
+        """
+        try:
+            # Get the current song's audio features from the dynamic fetch or create default values
+            song_features = {}
+            
+            if hasattr(self, '_song_df') and len(self._song_df.index) > 0:
+                # Try to get features from the song data
+                for feature in FEATURE_COLS:
+                    if feature in self._song_df.columns:
+                        song_features[feature] = self._song_df.iloc[0][feature]
+            else:
+                # Create default features based on what we know about the song
+                # These would be placeholder values - in a real implementation,
+                # you'd want to fetch these from Spotify API
+                song_features = {
+                    'popularity': 50,  # Default middle popularity
+                    'danceability': 0.5,
+                    'energy': 0.5,
+                    'speechiness': 0.1,
+                    'acousticness': 0.5,
+                    'instrumentalness': 0.1,
+                    'liveness': 0.1,
+                    'valence': 0.5
+                }
+            
+            # Calculate similar playlists using KNN
+            similar_playlists = self._calculate_playlist_similarity_knn(song_features, k=5)
+            
+            if not similar_playlists:
+                return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Unable to calculate playlist similarities</div>')
+            
+            # Create the chart
+            return self._create_closest_playlists_chart(song_features, similar_playlists)
+            
+        except Exception as e:
+            print(f"Error showing closest fitting playlists: {e}")
+            return Markup(f'<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Error creating closest playlists view: {str(e)}</div>')
+
     def graph_top_rank_table(self):
-        return shared_graph_top_rank_table(self._song_df)
+        # Ensure track data is available
+        if not self.ensure_track_data_available():
+            if self._needs_dynamic_fetch:
+                if self._dynamic_fetch_error:
+                    return Markup(f'<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Track data not available: {self._dynamic_fetch_error}</div>')
+                else:
+                    return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #5f5c6b; border-radius: 5px;">Fetching track data...</div>')
+            else:
+                return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Song not found in dataset</div>')
+        
+        # Clean any 'nan' values in rank columns for consistency
+        self._clean_rank_columns()
+        
+        # Check if song exists in database and has rank data
+        if len(self._song_df.index) == 0:
+            return self._show_closest_fitting_playlists()
+        
+        # Check if the song was added to any playlist
+        song_in_playlists = self._all_songs_df[
+            (self._all_songs_df['name'] == self._song) & 
+            (self._all_songs_df['artist'] == self._artist)
+        ]
+        
+        # If song was not added to any playlist, show Closest Fitting Playlists
+        if len(song_in_playlists.index) == 0:
+            return self._show_closest_fitting_playlists()
+        
+        # Check if we have rank columns and if they contain meaningful data
+        rank_columns = ['songs_short_rank', 'songs_med_rank', 'songs_long_rank']
+        has_ranks = all(col in self._song_df.columns for col in rank_columns)
+        
+        if has_ranks:
+            # Song exists in database and has rank columns - show Top 50 Rankings table
+            # Even if ranks are 'N/A', we should show the table structure since the song exists
+            rank_table = shared_graph_top_rank_table(self._song_df)
+            if rank_table is not None:
+                return rank_table
+            # If shared function fails, fall back to Closest Fitting Playlists
+            return self._show_closest_fitting_playlists()
+        
+        # If we get here, either:
+        # 1. Song doesn't exist in database, or
+        # 2. Song exists but missing rank columns entirely
+        # In both cases, show Closest Fitting Playlists
+        return self._show_closest_fitting_playlists()
+        
+
+
+    def graph_song_percentiles_vs_avg(self):
+        """Create a bar chart comparing song percentiles vs averages."""
+        # Ensure track data is available
+        if not self.ensure_track_data_available():
+            if self._needs_dynamic_fetch:
+                if self._dynamic_fetch_error:
+                    return Markup(f'<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Track data not available: {self._dynamic_fetch_error}</div>')
+                else:
+                    return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #5f5c6b; border-radius: 5px;">Fetching track data...</div>')
+            else:
+                return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Song not found in dataset</div>')
+        
+        # This method would need to be implemented based on your existing logic
+        # For now, return a placeholder
+        return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Song percentiles chart - implementation needed</div>')
+
+    def graph_date_added_to_playlist(self):
+        """Create a Gantt chart showing when the song was added to playlists."""
+        # Ensure track data is available
+        if not self.ensure_track_data_available():
+            if self._needs_dynamic_fetch:
+                if self._dynamic_fetch_error:
+                    return Markup(f'<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Track data not available: {self._dynamic_fetch_error}</div>')
+                else:
+                    return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #5f5c6b; border-radius: 5px;">Fetching track data...</div>')
+            else:
+                return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Song not found in dataset</div>')
+        
+        # This method would need to be implemented based on your existing logic
+        # For now, return a placeholder
+        return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Date added to playlist chart - implementation needed</div>')
+
+    def graph_count_timeline(self):
+        """Create a timeline chart showing song count over time."""
+        # Ensure track data is available
+        if not self.ensure_track_data_available():
+            if self._needs_dynamic_fetch:
+                if self._dynamic_fetch_error:
+                    return Markup(f'<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Track data not available: {self._dynamic_fetch_error}</div>')
+                else:
+                    return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Count timeline chart - implementation needed</div>')
+            else:
+                return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Count timeline chart - implementation needed</div>')
+        
+        # This method would need to be implemented based on your existing logic
+        # For now, return a placeholder
+        return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Count timeline chart - implementation needed</div>')
+
+    def graph_all_artists(self):
+        """Create charts showing all artists data."""
+        # Ensure track data is available
+        if not self.ensure_track_data_available():
+            if self._needs_dynamic_fetch:
+                if self._dynamic_fetch_error:
+                    return Markup(f'<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Track data not available: {self._dynamic_fetch_error}</div>')
+                else:
+                    return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #5f5c6b; border-radius: 5px;">Fetching track data...</div>')
+            else:
+                return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Song not found in dataset</div>')
+        
+        # This method would need to be implemented based on your existing logic
+        # For now, return a placeholder
+        return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">All artists charts - implementation needed</div>')
+
+    def graph_artist_genres(self):
+        """Create charts showing artist genres data."""
+        # Ensure track data is available
+        if not self.ensure_track_data_available():
+            if self._needs_dynamic_fetch:
+                if self._dynamic_fetch_error:
+                    return Markup(f'<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Track data not available: {self._dynamic_fetch_error}</div>')
+                else:
+                    return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #5f5c6b; border-radius: 5px;">Fetching track data...</div>')
+            else:
+                return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Song not found in dataset</div>')
+        
+        # Check if we have genre data
+        if not self._artist_genres or len(self._artist_genres) == 0:
+            return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">No genre data available for this artist</div>')
+        
+        # Check if we have multiple artists (more than one artist in the string)
+        num_artists = len(self._artist.split(','))
+        
+        if num_artists == 1:
+            return [', '.join(self._song_genres), False]
+        else:
+            # Create Venn diagram for multiple artists
+            try:
+                fig = _venn_diagram_artist_genres(
+                    self._artist.split(', '), self._artist_genres)
+                
+                # Handle case where Venn diagram creation fails
+                if fig is None:
+                    return [Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Unable to create artist genres comparison chart</div>'), True]
+                return [fig, True]
+            except Exception as e:
+                print(f"Error creating artist genres chart: {e}")
+                return [Markup(f'<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Error creating artist genres chart: {str(e)}</div>'), True]
+
+    def graph_most_common_artists_with_same_genres(self):
+        """Create charts showing most common artists with same genres."""
+        # Ensure track data is available
+        if not self.ensure_track_data_available():
+            if self._needs_dynamic_fetch:
+                if self._dynamic_fetch_error:
+                    return Markup(f'<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Track data not available: {self._dynamic_fetch_error}</div>')
+                else:
+                    return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #5f5c6b; border-radius: 5px;">Fetching track data...</div>')
+            else:
+                return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Song not found in dataset</div>')
+        
+        # Check if we have a playlist and genre data
+        if not self._playlist:
+            return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">No playlist specified for this analysis</div>')
+        
+        if not self._song_genres or len(self._song_genres) == 0:
+            return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">No genre data available for this artist</div>')
+        
+        try:
+            # Get all songs in the current playlist
+            playlist_mask = self._all_songs_df['playlist'] == self._playlist
+            playlist_df = self._all_songs_df[playlist_mask]
+            
+            if len(playlist_df.index) == 0:
+                return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">No songs found in this playlist</div>')
+            
+            # Find artists in the playlist that share genres with the current artist
+            shared_genre_artists = {}
+            
+            # Check if current artist has genres other than "N/A"
+            current_has_non_na_genres = any(genre != "N/A" for genre in self._song_genres)
+            
+            for _, row in playlist_df.iterrows():
+                # Split the artist field on commas to handle multiple artists per song
+                song_artists = [artist.strip() for artist in row['artist'].split(',')]
+                
+                # Check if this song has genre data
+                if 'genres' in row and row['genres']:
+                    song_genres = set()
+                    for genre_list in row['genres']:
+                        if isinstance(genre_list, list):
+                            song_genres.update(genre_list)
+                        else:
+                            song_genres.add(genre_list)
+                    
+                    # Check for genre overlap (including N/A genres)
+                    if song_genres & set(self._song_genres):
+                        for artist in song_artists:
+                            if artist in shared_genre_artists:
+                                shared_genre_artists[artist] += 1
+                            else:
+                                shared_genre_artists[artist] = 1
+            
+            if not shared_genre_artists:
+                return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">No artists with shared genres found in this playlist</div>')
+            
+            # Sort by count and take top 10
+            top_artists = sorted(shared_genre_artists.items(), key=lambda x: x[1], reverse=True)[:10]
+            
+            # Create the bar chart
+            artist_names = [artist for artist, count in top_artists]
+            counts = [count for artist, count in top_artists]
+            
+            fig = go.Figure(data=[
+                go.Bar(
+                    x=counts,
+                    y=artist_names,
+                    orientation='h',
+                    marker_color='#1DB954',
+                    text=counts,
+                    textposition='auto'
+                )
+            ])
+            
+            fig.update_layout(
+                title=f'Most Common Artists with Shared Genres in {self._playlist}',
+                xaxis_title='Number of Songs',
+                yaxis_title='Artist',
+                height=max(400, len(artist_names) * 40)
+            )
+            
+            return Markup(fig.to_html(full_html=False))
+            
+        except Exception as e:
+            print(f"Error creating most common artists chart: {e}")
+            return Markup(f'<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Error creating most common artists chart: {str(e)}</div>')
+
+    def graph_song_genres_vs_avg(self, playlist=False):
+        """Create charts showing song genres vs averages."""
+        # Ensure track data is available
+        if not self.ensure_track_data_available():
+            if self._needs_dynamic_fetch:
+                if self._dynamic_fetch_error:
+                    return Markup(f'<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Track data not available: {self._dynamic_fetch_error}</div>')
+                else:
+                    return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #5f5c6b; border-radius: 5px;">Fetching track data...</div>')
+            else:
+                return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Song not found in dataset</div>')
+        
+        # Check if we have genre data
+        if not self._song_genres or len(self._song_genres) == 0:
+            return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">No genre data available for this artist</div>')
+        
+        try:
+            if playlist:
+                # New functionality: Percentage of Songs with Same Genres as Artist in Current Playlist
+                if not self._playlist:
+                    # If no playlist specified, show genre percentages across all playlists
+                    playlist_df = self._all_songs_df
+                    title = 'Percentage of Songs With Same Genres As ' + self._artist + ' Across All Playlists'
+                else:
+                    # Get all songs in the current playlist
+                    playlist_mask = self._all_songs_df['playlist'] == self._playlist
+                    playlist_df = self._all_songs_df[playlist_mask]
+                    
+                    if len(playlist_df.index) == 0:
+                        return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">No songs found in this playlist</div>')
+                    
+                    title = 'Percentage of Songs With Same Genres As ' + self._artist + ' in ' + self._playlist
+                xaxis = '% of Songs with Genres'
+
+                percents = []
+                song_counts = []
+                length = len(playlist_df.index) if len(playlist_df.index) > 0 else 1
+                
+                for g in self._song_genres:
+                    try:
+                        mask = playlist_df['genres'].apply(lambda x: g in {z for y in x for z in y})
+                        count = len(playlist_df[mask].index)
+                        percents.append(count/length*100)
+                        song_counts.append(count)
+                    except Exception:
+                        percents.append(0.0)
+                        song_counts.append(0)
+
+                # Create hovertext with song counts
+                hovertext = [f"{count} songs ({percent:.1f}%)" for count, percent in zip(song_counts, percents)]
+                
+                series = pd.Series(dict(zip(self._song_genres, percents)))
+                return _h_bar(series, title=title, xaxis=xaxis, percents=True, fixHeight=True, hovertext=hovertext)
+            else:
+                # Original functionality for overall playlists
+                avg_df = self._all_songs_df
+                title = 'Percentage of Songs With Same Genres As ' + self._artist + ' Across All Playlists'
+                xaxis = '% of Songs with Genres'
+
+                percents = []
+                length = len(avg_df.index) if len(avg_df.index) > 0 else 1
+                for g in self._song_genres:
+                    try:
+                        mask = avg_df['genres'].apply(lambda x: g in {z for y in x for z in y})
+                        percents.append(len(avg_df[mask].index)/length*100)
+                    except Exception:
+                        percents.append(0.0)
+
+                series = pd.Series(dict(zip(self._song_genres, percents)))
+                return _h_bar(series, title=title, xaxis=xaxis, percents=True, fixHeight=True)
+                
+        except Exception as e:
+            print(f"Error creating song genres chart: {e}")
+            return Markup(f'<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Error creating song genres chart: {str(e)}</div>')
 
     def graph_song_features_vs_avg(self):
         """
         Create a vertical bar graph comparing audio features across different data sources.
         Features: playlist median, all playlists median, artist median, and song's actual values.
         """
+        # Ensure track data is available
+        if not self.ensure_track_data_available():
+            if self._needs_dynamic_fetch:
+                if self._dynamic_fetch_error:
+                    return Markup(f'<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Track data not available: {self._dynamic_fetch_error}</div>')
+                else:
+                    return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #5f5c6b; border-radius: 5px;">Fetching track data...</div>')
+            else:
+                return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">Song not found in dataset</div>')
+
         UNIQUE_SONGS_DF = self._unique_songs_df
         ALL_SONGS_DF = self._all_songs_df
 
@@ -1079,24 +2361,33 @@ class CurrentlyPlayingPage():
         # Prepare data for plotting
         data = []
         names = []
+        visibility = []
         
         # Add playlist median if it exists
         if playlist_median is not None:
             data.append(playlist_median)
             names.append(self._playlist)
+            # Hide playlist median when playing from playlist, but keep in legend
+            visibility.append('legendonly' if self._playlist else True)
         
         # Add all playlists median
         data.append(all_playlists_median)
         names.append('All Playlists')
+        # Hide all playlists median when playing from playlist, but keep in legend
+        visibility.append('legendonly' if self._playlist else True)
         
         # Add artist medians
         for artist_name, artist_median in artist_medians:
             data.append(artist_median)
             names.append(artist_name)
+            # Hide artist medians when playing from playlist, but keep in legend
+            visibility.append('legendonly' if self._playlist else True)
         
         # Add song's actual values
         data.append(song_values)
         names.append(self._song)
+        # Always show song trace
+        visibility.append(True)
 
         # Normalize popularity to 0-1 scale and round all values to 2 decimal places
         for i, df in enumerate(data):
@@ -1110,7 +2401,7 @@ class CurrentlyPlayingPage():
         # Create the bar chart
         fig = go.Figure()
         
-        for i, (name, values) in enumerate(zip(names, data)):
+        for i, (name, values, is_visible) in enumerate(zip(names, data, visibility)):
             # Convert to list and handle any NaN values
             y_values = []
             text_values = []
@@ -1129,6 +2420,7 @@ class CurrentlyPlayingPage():
                 y=y_values,
                 text=text_values,
                 textposition='auto',
+                visible=is_visible,
                 hovertemplate='<b>%{fullData.name}</b><br>' +
                             'Feature: %{x}<br>' +
                             'Value: %{y}<br>' +
@@ -1168,17 +2460,25 @@ class CurrentlyPlayingPage():
         ALL_SONGS_DF = self._all_songs_df
 
         # Since playlist and artist df length will vary, make new percentile cols for them and then isolate song
+        playlist_df = pd.DataFrame()  # Initialize empty DataFrame
         if self._playlist:
-            playlist_df = ALL_SONGS_DF[ALL_SONGS_DF['playlist'] == self._playlist]
+            playlist_df = ALL_SONGS_DF[ALL_SONGS_DF['playlist'] == self._playlist].copy()
 
+            # Check if current song already exists in playlist
             exists_df = playlist_df[playlist_df['name'] == self._song]
             exists_df = exists_df[exists_df['artist'] == self._artist]
+            
+            # If song doesn't exist in playlist, add it for percentile calculation
             if len(exists_df) == 0:
-                song_df = ALL_SONGS_DF[ALL_SONGS_DF['name'] == self._song]
-                song_df = song_df[song_df['artist'] == self._artist]
+                # Get the current song data from unique_songs_df
+                current_song_df = UNIQUE_SONGS_DF[UNIQUE_SONGS_DF['name'] == self._song]
+                current_song_df = current_song_df[current_song_df['artist'] == self._artist]
+                
+                if len(current_song_df) > 0:
+                    # Add current song to playlist_df for percentile calculation
+                    playlist_df = pd.concat([playlist_df, current_song_df], ignore_index=True)
 
-                playlist_df = pd.concat([playlist_df, song_df])
-
+            # Calculate percentiles for the playlist (including current song if it wasn't there)
             for col in PERCENTILE_COLS:
                 if col in playlist_df.columns and not playlist_df[col].isna().all():
                     # Filter out NaN values before calculating percentiles
@@ -1196,6 +2496,8 @@ class CurrentlyPlayingPage():
                         playlist_df[col + '_percentile'] = 0.0
                 else:
                     playlist_df[col + '_percentile'] = 0.0
+            
+            # Now get just the current song's data from the playlist
             playlist_df = playlist_df[(playlist_df['name'] == self._song) & (playlist_df['artist'] == self._artist)]
 
         artist_dfs = []
@@ -1239,25 +2541,62 @@ class CurrentlyPlayingPage():
             return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">No audio features data available for this song</div>')
         
         cols = available_percentile_cols
+        
+        # Replace NaN values with "N/A" for better display
+        if len(playlist_df) > 0:
+            for col in cols:
+                playlist_df[col] = playlist_df[col].fillna('N/A')
+        
+        if len(avg_df) > 0:
+            for col in cols:
+                avg_df[col] = avg_df[col].fillna('N/A')
+        
+        for artist_df in artist_dfs:
+            if len(artist_df) > 0:
+                for col in cols:
+                    artist_df[col] = artist_df[col].fillna('N/A')
 
         dfs = {}
+        visibility = {}
+        
         if self._playlist:
+            # When playing from a playlist, show playlist trace by default
             dfs[self._playlist] = playlist_df[cols]
-        dfs['All Playlists'] = avg_df[cols]
-        for i, j in zip(self._artist.split(', '), [adf[cols] for adf in artist_dfs]):
-            dfs[i] = j
+            visibility[self._playlist] = True
+            
+            # Add other traces but hide them initially, but keep in legend
+            dfs['All Playlists'] = avg_df[cols]
+            visibility['All Playlists'] = 'legendonly'
+            
+            for i, j in zip(self._artist.split(', '), [adf[cols] for adf in artist_dfs]):
+                dfs[i] = j
+                visibility[i] = 'legendonly'
+        else:
+            # When not playing from a playlist, show All Playlists trace by default
+            dfs['All Playlists'] = avg_df[cols]
+            visibility['All Playlists'] = True
+            
+            # Hide artist traces initially but keep them in legend
+            for i, j in zip(self._artist.split(', '), [adf[cols] for adf in artist_dfs]):
+                dfs[i] = j
+                visibility[i] = 'legendonly'
 
         data = []
         # Create x-axis labels from the available percentile columns (remove '_percentile' suffix)
         x_labels = [col.replace('_percentile', '') for col in available_percentile_cols]
         
         for name, df in dfs.items():
-            # Handle NaN values safely when converting to text
+            # Safety check: ensure DataFrame has data
+            if len(df.index) == 0:
+                print(f"Warning: DataFrame for {name} is empty, skipping...")
+                continue
+                
+            # Handle NaN values and "N/A" values safely when converting to text
             y_values = df.iloc[0]
             text_values = []
             hover_values = []
             for val in y_values:
-                if pd.isna(val):
+                if pd.isna(val) or val == 'N/A':
                     text_values.append('N/A')
                     hover_values.append('N/A')
                 else:
@@ -1268,17 +2607,37 @@ class CurrentlyPlayingPage():
                     hover_val = round(val, 2)
                     hover_values.append(hover_val)
             
-            data.append(go.Bar(
-                name=name, 
-                x=x_labels, 
-                y=y_values, 
-                text=text_values, 
-                textposition='auto',
-                hovertemplate='<b>%{fullData.name}</b><br>' +
-                             'Feature: %{x}<br>' +
-                             'Percentile: %{customdata}<extra></extra>',
-                customdata=hover_values
-            ))
+            # Filter out "N/A" values for the y-axis (but keep them in text and hover)
+            y_values_filtered = []
+            x_labels_filtered = []
+            text_values_filtered = []
+            hover_values_filtered = []
+            
+            for i, (y_val, x_label, text_val, hover_val) in enumerate(zip(y_values, x_labels, text_values, hover_values)):
+                if y_val != 'N/A':
+                    y_values_filtered.append(y_val)
+                    x_labels_filtered.append(x_label)
+                    text_values_filtered.append(text_val)
+                    hover_values_filtered.append(hover_val)
+            
+            # Only add the bar if we have valid data
+            if y_values_filtered:
+                data.append(go.Bar(
+                    name=name, 
+                    x=x_labels_filtered, 
+                    y=y_values_filtered, 
+                    text=text_values_filtered, 
+                    textposition='auto',
+                    visible=visibility[name],
+                    hovertemplate='<b>%{fullData.name}</b><br>' +
+                                 'Feature: %{x}<br>' +
+                                 'Percentile: %{customdata}<extra></extra>',
+                    customdata=hover_values_filtered
+                ))
+
+        # Check if we have any data to plot
+        if not data:
+            return Markup('<div style="padding: 20px; text-align: center; color: #721c24; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 5px;">No data available for percentile comparison</div>')
 
         fig = go.Figure(data=data)
 
@@ -1309,10 +2668,16 @@ class CurrentlyPlayingPage():
 
     def graph_count_timeline(self):
         if not self._playlist:
-            return None
-        
-        # Filter data for the current playlist
-        playlist_df = self._all_songs_df[self._all_songs_df['playlist'] == self._playlist]
+            # If no playlist specified, show the song's timeline across all playlists
+            playlist_df = self._all_songs_df[
+                (self._all_songs_df['name'] == self._song) & 
+                (self._all_songs_df['artist'] == self._artist)
+            ]
+            title_suffix = " Across All Playlists"
+        else:
+            # Filter data for the current playlist
+            playlist_df = self._all_songs_df[self._all_songs_df['playlist'] == self._playlist]
+            title_suffix = f" in {self._playlist}"
         
         if len(playlist_df.index) == 0:
             return None
@@ -1333,11 +2698,12 @@ class CurrentlyPlayingPage():
         fig = go.Figure()
         
         # Add main timeline trace
+        trace_name = f'Songs Added{title_suffix}' if self._playlist else f'{self._song} Added to Playlists'
         fig.add_trace(go.Scatter(
             x=timeline_data['date_added'],
             y=timeline_data['name'].apply(len),
             mode='lines+markers',
-            name=f'Songs Added to {self._playlist}',
+            name=trace_name,
             line=dict(color=MAIN_TIMELINE_COLOR),
             marker=dict(size=8),
             hovertext=hovertext,
@@ -1368,8 +2734,9 @@ class CurrentlyPlayingPage():
             )
         
         # Update layout
+        title_text = f"Timeline of Songs Added{title_suffix}" if self._playlist else f"Timeline of {self._song} Added to Playlists"
         fig.update_layout(
-            title_text=f"Timeline of Songs Added to {self._playlist}",
+            title_text=title_text,
             xaxis_title="Date",
             yaxis_title="Number of Songs Added",
             height=500,
@@ -1511,9 +2878,7 @@ class CurrentlyPlayingPage():
                             if artist_name == self._artist:
                                 continue
                             
-                            # If current artist has non-N/A genres, exclude artists that only share "N/A"
-                            if current_has_non_na_genres and shared_genres == {"N/A"}:
-                                continue
+                            # Include all artists that share any genres, including N/A
                             
                             # This artist shares genres with the current artist
                             if artist_name not in shared_genre_artists:
@@ -1601,6 +2966,115 @@ class CurrentlyPlayingPage():
             artist_top_graphs.append(
                 (artist_top_playlists_bar, artist_top_songs_table))
         return artist_top_graphs
+
+    def _fix_genres_column(self, df):
+        """Convert genre strings back to lists after loading from NDJSON"""
+        if 'genres' in df.columns:
+            df['genres'] = df['genres'].apply(self._parse_genre_string)
+        return df
+
+    def _parse_genre_string(self, genre_value):
+        """Parse genre from string representation back to list"""
+        # Handle pandas Series or arrays properly
+        if hasattr(genre_value, '__iter__') and not isinstance(genre_value, (str, list)):
+            # If it's a pandas Series or array, take the first value
+            if len(genre_value) > 0:
+                genre_value = genre_value.iloc[0] if hasattr(genre_value, 'iloc') else genre_value[0]
+            else:
+                return [["N/A"]]
+        
+        # Check for None or NaN values
+        if genre_value is None:
+            return [["N/A"]]
+        
+        # Handle pandas NaN values
+        try:
+            if pd.isna(genre_value):
+                return [["N/A"]]
+        except:
+            pass
+        
+        if isinstance(genre_value, list):
+            # Check if this is already a proper list of genres (not nested)
+            # If all items are strings, return as-is (already properly formatted)
+            if all(isinstance(item, str) for item in genre_value):
+                # Clean string items
+                cleaned_genres = []
+                for item in genre_value:
+                    clean_item = item.strip().strip('"\'[]')
+                    if clean_item and clean_item != 'N/A':
+                        cleaned_genres.append(clean_item)
+                return cleaned_genres if cleaned_genres else ['N/A']
+            
+            # Handle nested list structure (legacy format)
+            cleaned_list = []
+            for item in genre_value:
+                if isinstance(item, list):
+                    # Clean nested list
+                    cleaned_nested = []
+                    for nested_item in item:
+                        if isinstance(nested_item, str):
+                            clean_item = nested_item.strip().strip('"\'[]')
+                            if clean_item:
+                                cleaned_nested.append(clean_item)
+                    if cleaned_nested:
+                        cleaned_list.append(cleaned_nested)
+                    else:
+                        cleaned_list.append(["N/A"])
+                elif isinstance(item, str):
+                    # Clean string item
+                    clean_item = item.strip().strip('"\'[]')
+                    if clean_item:
+                        cleaned_list.append([clean_item])
+                    else:
+                        cleaned_list.append(["N/A"])
+                else:
+                    cleaned_list.append(["N/A"])
+            return cleaned_list if cleaned_list else [["N/A"]]
+        
+        if isinstance(genre_value, str):
+            # Handle JSON-like strings
+            if genre_value.startswith('[') and genre_value.endswith(']'):
+                try:
+                    import json
+                    parsed = json.loads(genre_value)
+                    if isinstance(parsed, list):
+                        # Clean the parsed list
+                        cleaned_list = []
+                        for item in parsed:
+                            if isinstance(item, list):
+                                cleaned_nested = []
+                                for nested_item in item:
+                                    if isinstance(nested_item, str):
+                                        clean_item = nested_item.strip().strip('"\'[]')
+                                        if clean_item:
+                                            cleaned_nested.append(clean_item)
+                                if cleaned_nested:
+                                    cleaned_list.append(cleaned_nested)
+                                else:
+                                    cleaned_list.append(["N/A"])
+                            elif isinstance(item, str):
+                                clean_item = item.strip().strip('"\'[]')
+                                if clean_item:
+                                    cleaned_list.append([clean_item])
+                                else:
+                                    cleaned_list.append(["N/A"])
+                        return cleaned_list if cleaned_list else [["N/A"]]
+                except:
+                    pass
+            
+            # Handle comma-separated strings
+            if ',' in genre_value:
+                genres = [g.strip().strip('"\'[]') for g in genre_value.split(',') if g.strip()]
+                return [genres] if genres else [["N/A"]]
+            
+            # Single genre
+            if genre_value.strip():
+                clean_genre = genre_value.strip().strip('"\'[]')
+                if clean_genre:
+                    return [[clean_genre]]
+        
+        return [["N/A"]]
 
 
 # Home Page ----------------------------------------------------------------------------------------------
@@ -1967,18 +3441,22 @@ class HomePage(OptimizedPageBase):
             first_year = int(str(first_date)[:4])
             current_year = int(str(self._today.date())[:4])
             
-            # Get month and day from first song added
-            first_month = int(str(first_date)[5:7])
-            first_day = int(str(first_date)[8:10])
+            # Get month and day from today's date (current date)
+            today_month = self._today.month
+            today_day = self._today.day
             
             for year in range(first_year, current_year + 1):
-                anniversary_date = datetime.datetime(year, first_month, first_day)
-                fig.add_vline(
-                    x=anniversary_date,
-                    line_width=2,
-                    line_dash="dash",
-                    line_color=YEARLY_VLINE_COLOR
-                )
+                try:
+                    anniversary_date = datetime.datetime(year, today_month, today_day)
+                    fig.add_vline(
+                        x=anniversary_date,
+                        line_width=3,
+                        line_dash="dash",
+                        line_color="green"
+                    )
+                except ValueError:
+                    # Skip invalid dates (e.g., February 29 in non-leap years)
+                    continue
         
         # Create buttons for Line, Continuous, Bar views
         buttons = []
@@ -2164,12 +3642,20 @@ class AboutPage():
             first = i*10
             last = (i+1)*10
             subset = df.iloc[first:last].sort_values(by='num_playlists')
-            subset['playlists'] = [', '.join(i) for i in subset['playlist']]
+            subset['playlists'] = ['<br>'.join(i) for i in subset['playlist']]
             subset = subset[['name', 'num_playlists', 'playlists']]
 
             title = 'Top ' + str(first+1)  + '-' + str(last) + ' Most Common Songs Across ' + \
                 str(len(self._all_songs_df['playlist'].unique())) + ' Playlists'
-            bar = px.bar(subset, x='num_playlists', y='name', orientation='h', title=title, text='num_playlists', hover_data="playlists")
+            
+            # Create series for _h_bar function
+            series = pd.Series(dict(zip(subset['name'], subset['num_playlists'])))
+            bar_trace = _h_bar(series, title=title, xaxis='Number of Playlists', yaxis='Song', 
+                              hovertext=subset['playlists'], to_html=False)
+            
+            # Convert Bar trace to Figure
+            bar = go.Figure(data=[bar_trace])
+            bar.update_layout(title=title, xaxis_title='Number of Playlists', yaxis_title='Song')
             graphs.append(bar)
 
         labels = []
@@ -2206,6 +3692,20 @@ class AboutPage():
                 counts.append(len(a_df.index))
             df = pd.DataFrame({'Artist':artists, 'Count':counts})
         df = df.sort_values(by='Count', ascending=False).iloc[:buttons*10]
+        
+        # Validate the main DataFrame before processing
+        if df.empty:
+            print(f"Warning: No data available for {yaxis} visualization")
+            return Markup("<p>No data available for this visualization.</p>")
+        
+        # Ensure Count column is numeric
+        df['Count'] = pd.to_numeric(df['Count'], errors='coerce')
+        df = df.dropna(subset=['Count'])
+        
+        if df.empty:
+            print(f"Warning: No valid numeric data for {yaxis} visualization")
+            return Markup("<p>No valid data available for this visualization.</p>")
+        
         # df['link'] = [REDIRECT_URI + yaxis.lower() + 's/' + i for i in df[yaxis.lower()]]
 
         graphs = []
@@ -2214,12 +3714,29 @@ class AboutPage():
             last = (i+1)*10
             subset = df.iloc[first:last].sort_values(by='Count')
 
+            # Skip if subset is empty or has no valid data
+            if subset.empty or len(subset) == 0:
+                continue
+                
+            # Ensure Count column has valid numeric values
+            subset = subset.dropna(subset=['Count'])
+            subset['Count'] = pd.to_numeric(subset['Count'], errors='coerce')
+            subset = subset.dropna(subset=['Count'])
+            
+            if subset.empty:
+                continue
+
             title = 'Top ' + str(first+1)  + '-' + str(last) + f' Most Common {yaxis}s Across ' + \
                 str(len(self._all_songs_df['playlist'].unique())) + ' Playlists'
-            if albums:
-                bar = px.bar(subset, x='Count', y=yaxis, orientation='h', title=title, text='Count', hover_data='Artist')
-            else:
-                bar = px.bar(subset, x='Count', y=yaxis, orientation='h', title=title, text='Count')
+            
+            try:
+                if albums:
+                    bar = px.bar(subset, x='Count', y=yaxis, orientation='h', title=title, text='Count', hover_data='Artist')
+                else:
+                    bar = px.bar(subset, x='Count', y=yaxis, orientation='h', title=title, text='Count')
+            except Exception as e:
+                print(f"Error creating bar chart for {yaxis}: {e}")
+                continue
             ## Prob doesn't work with subplots
             # for r in subset.iterrows():
             #     bar.add_annotation(
@@ -2231,14 +3748,19 @@ class AboutPage():
             #     )
             graphs.append(bar)
 
+        # Check if we have any valid graphs
+        if not graphs:
+            print(f"Warning: No valid graphs created for {yaxis} visualization")
+            return Markup("<p>No valid data available for this visualization.</p>")
+
         labels = []
-        for i in range(buttons):
+        for i in range(len(graphs)):  # Use actual number of graphs created
             start = i * 10 + 1
             end = (i + 1) * 10
             labels.append(f"{start}-{end}")
 
         final = _make_single_subplot(labels, graphs, xaxis, yaxis, 
-                'Top ' + str(buttons*10) + f' Most Common {yaxis}s Across ' + \
+                'Top ' + str(len(graphs)*10) + f' Most Common {yaxis}s Across ' + \
                 str(len(ALL_SONGS_DF['playlist'].unique())) + ' Playlists')
 
         if albums:
@@ -2716,11 +4238,10 @@ class AnalyzePlaylistsPage():
 
 # Analyze Single Playlist Page ----------------------------------------------------------------------------------------------
 
-class AnalyzePlaylistPage():
+class AnalyzePlaylistPage(OptimizedPageBase):
     def __init__(self, playlist, all_songs_df, unique_songs_df, global_playlist_averages=None):
+        super().__init__(None, all_songs_df, unique_songs_df)
         self._playlist = playlist
-        self._all_songs_df = pd.DataFrame(all_songs_df)
-        self._unique_songs_df = pd.DataFrame(unique_songs_df)
         self._global_playlist_averages = global_playlist_averages
 
         self._playlist_df = self._all_songs_df[self._all_songs_df['playlist']
@@ -2882,14 +4403,24 @@ class AnalyzePlaylistPage():
             first_year = first_date.year
             current_year = datetime.datetime.now().year
             
+            # Get month and day from today's date (current date)
+            today = datetime.datetime.now()
+            today_month = today.month
+            today_day = today.day
+            
             for year in range(first_year, current_year + 1):
-                anniversary_date = datetime.datetime(year, first_date.month, first_date.day)
-                fig.add_vline(
-                    x=anniversary_date,
-                    line_width=2,
-                    line_dash="dash",
-                    line_color=YEARLY_VLINE_COLOR
-                )
+                try:
+                    anniversary_date = datetime.datetime(year, today_month, today_day)
+                    
+                    fig.add_vline(
+                        x=anniversary_date,
+                        line_width=3,
+                        line_dash="dash",
+                        line_color="green"
+                    )
+                except ValueError:
+                    # Skip invalid dates (e.g., February 29 in non-leap years)
+                    continue
         
         # Add horizontal lines for global averages (only visible in Continuous view)
         if self._global_playlist_averages:
@@ -3048,20 +4579,50 @@ class AnalyzePlaylistPage():
             return Markup(fig.to_html(full_html=False))
         
         genres = defaultdict(int)
-        for i in df['genres']:
-            unique_genres = {y for x in i for y in x}
+        genre_songs = defaultdict(list)  # Store song names for each genre
+        
+        for idx, row in df.iterrows():
+            song_name = row['name']
+            i = row['genres']
+            
+            if isinstance(i, list) and len(i) > 0:
+                # Check if it's a list of lists or list of strings
+                if isinstance(i[0], list):
+                    # It's a list of lists, flatten it
+                    unique_genres = {y for x in i for y in x}
+                else:
+                    # It's a list of strings, use as is
+                    unique_genres = set(i)
+            else:
+                # Handle other cases
+                unique_genres = set()
+            
             for j in unique_genres:
                 genres[j] += 1
+                genre_songs[j].append(song_name)
+        
         total = len(df.index)
         relative = {k: v/total*100 for k,
                     v in sorted(genres.items(), key=lambda x: x[1], reverse=True)[:10]}
-        genres = {k: str(v) for k, v in sorted(
+        genre_counts = {k: str(v) for k, v in sorted(
             genres.items(), key=lambda x: x[1], reverse=True)}
+
+        # Create hovertext with song names
+        hovertext = []
+        for genre in relative.keys():
+            count = genre_counts[genre]
+            songs = genre_songs[genre]
+            # Sample up to MAX_HOVER_ROWS songs
+            sample_songs = songs[:MAX_HOVER_ROWS] if len(songs) > MAX_HOVER_ROWS else songs
+            song_list = '<br>'.join(sample_songs)
+            hovertext.append(f'{count} Songs<br><br>{song_list}')
 
         series = pd.Series(relative)
         title = 'Most Common Genres For Playlist: ' + self._playlist
+        
+        
         return _h_bar(series, title=title, xaxis='% of Songs', yaxis='Artist Genre', percents=True,
-                      hovertext=[genres[i] + ' Songs' for i in relative])
+                      hovertext=hovertext)
 
     def graph_top_artists(self, top_n=10):
         df = self._playlist_df.copy()
@@ -3134,16 +4695,24 @@ class AnalyzePlaylistPage():
         mask = UNIQUE_SONGS_DF['playlist'].apply(lambda x: self._playlist in x)
         df = UNIQUE_SONGS_DF[mask]
 
+        # Fix playlist column to ensure it's properly formatted
+        df = self._fix_playlist_column(df.copy())
+        
         # Get all other playlists that share songs with current playlist
-        other_playlists = {j for i in df['playlist']
-                           for j in i if j != self._playlist}
+        other_playlists = set()
+        for playlist_list in df['playlist']:
+            # Now iterate over the actual playlist names
+            for playlist_name in playlist_list:
+                if playlist_name != self._playlist:
+                    other_playlists.add(playlist_name)
+        
         
         # Filter out empty playlists and ensure we have data to work with
         if len(other_playlists) == 0:
             # Return empty graph if no other playlists share songs
             fig = go.Figure()
             fig.update_layout(
-                title=f'Most Similar Playlists by % of {self._playlist} in Playlist',
+                title=f'X % of {self._playlist} Songs are in These Playlists',
                 xaxis_title=f'% of {self._playlist} Songs',
                 yaxis_title='Playlist',
                 annotations=[{
@@ -3171,7 +4740,9 @@ class AnalyzePlaylistPage():
             dicty.items(), key=lambda x: x[1], reverse=True)}
 
         series = pd.Series(relative)
-        title = f'Most Similar Playlists by % of {self._playlist} in Playlist'
+        title = f'X % of {self._playlist} Songs are in These Playlists'
+        
+        
         return _h_bar(series, title=title, xaxis=f'% of {self._playlist} Songs', yaxis='Playlist', percents=True,
                       hovertext=[counts[i] + ' Songs' for i in relative])
 
@@ -3181,16 +4752,24 @@ class AnalyzePlaylistPage():
         mask = UNIQUE_SONGS_DF['playlist'].apply(lambda x: self._playlist in x)
         current_playlist_df = UNIQUE_SONGS_DF[mask]
 
+        # Fix playlist column to ensure it's properly formatted
+        current_playlist_df = self._fix_playlist_column(current_playlist_df.copy())
+        
         # Get all other playlists that share songs with current playlist
-        other_playlists = {j for i in current_playlist_df['playlist']
-                           for j in i if j != self._playlist}
+        other_playlists = set()
+        for playlist_list in current_playlist_df['playlist']:
+            # Now iterate over the actual playlist names
+            for playlist_name in playlist_list:
+                if playlist_name != self._playlist:
+                    other_playlists.add(playlist_name)
+        
         
         # Filter out empty playlists and ensure we have data to work with
         if len(other_playlists) == 0:
             # Return empty graph if no other playlists share songs
             fig = go.Figure()
             fig.update_layout(
-                title=f'Most Similar Playlists by % of Playlist in {self._playlist}',
+                title=f'X % of These Playlists are in {self._playlist}',
                 xaxis_title='% of Playlist Songs',
                 yaxis_title='Playlist',
                 annotations=[{
@@ -3229,7 +4808,9 @@ class AnalyzePlaylistPage():
         relative = dict(sorted(dicty.items(), key=lambda x: x[1], reverse=True)[:top_n])
 
         series = pd.Series(relative)
-        title = f'Most Similar Playlists by % of Playlist in {self._playlist}'
+        title = f'X % of These Playlists are in {self._playlist}'
+        
+        
         return _h_bar(series, title=title, xaxis=f'% of Playlist Songs', yaxis='Playlist', percents=True,
                       hovertext=[counts[i] + ' Songs' for i in relative])
 
@@ -3316,17 +4897,6 @@ class Top50Page():
         x_data = FEATURE_COLS
         y_data = []
 
-        # Get the rank column for this time range
-        rank_col = 'artists_' + TIME_RANGE_DICT[time_range][1]
-        
-        # Filter DataFrame to only include songs by top 50 artists
-        mask = self._unique_songs_df[rank_col].apply(lambda x: type(x) == int)
-        df = self._unique_songs_df[mask]
-        
-        # Safety check: if no songs found, create empty DataFrame with expected columns
-        if len(df) == 0:
-            df = pd.DataFrame(columns=self._unique_songs_df.columns)
-        
         # Group by artist and calculate median for each feature
         artist_features = {}
         for feature in FEATURE_COLS:
@@ -3337,9 +4907,9 @@ class Top50Page():
                 # For other features, calculate median across all songs by each artist
                 feature_medians = []
                 for artist in self._top_artists[time_range]:
-                    # Find all songs by this artist
-                    artist_mask = df['artist'].apply(lambda x: artist in x.split(', '))
-                    artist_songs = df[artist_mask]
+                    # Find all songs by this artist in the full unique_songs_df
+                    artist_mask = self._unique_songs_df['artist'].apply(lambda x: artist in x.split(', '))
+                    artist_songs = self._unique_songs_df[artist_mask]
                     
                     if len(artist_songs) > 0 and feature in artist_songs.columns:
                         # Filter out NaN values before calculating median
@@ -3397,9 +4967,40 @@ class Top50Page():
 
         num_by_genre = dict()
         top_by_genre = dict()
-        unique_genres = {k for i in df['genres'] for j in i for k in j}
+        # Fix: Correctly extract unique genres from nested list structure
+        unique_genres = set()
+        for genre_list in df['genres']:
+            if isinstance(genre_list, list):
+                for genre_group in genre_list:
+                    if isinstance(genre_group, list):
+                        # Handle nested list structure: [['genre1'], ['genre2']]
+                        for genre in genre_group:
+                            if isinstance(genre, str) and genre.strip():
+                                unique_genres.add(genre.strip())
+                    elif isinstance(genre_group, str) and genre_group.strip():
+                        # Handle simple list structure: ['genre1', 'genre2']
+                        unique_genres.add(genre_group.strip())
+            elif isinstance(genre_list, str) and genre_list.strip():
+                # Handle single string genre
+                unique_genres.add(genre_list.strip())
+        
         for g in unique_genres:
-            mask = df['genres'].apply(lambda x: g in {z for y in x for z in y})
+            # Fix: Correctly check if genre exists in both nested and simple structures
+            def genre_exists_in_row(genre_row):
+                if isinstance(genre_row, list):
+                    for genre_group in genre_row:
+                        if isinstance(genre_group, list):
+                            # Nested structure: [['genre1'], ['genre2']]
+                            return g in [genre.strip() for genre in genre_group if isinstance(genre, str)]
+                        elif isinstance(genre_group, str):
+                            # Simple structure: ['genre1', 'genre2']
+                            return g == genre_group.strip()
+                elif isinstance(genre_row, str):
+                    # Single string genre
+                    return g == genre_row.strip()
+                return False
+            
+            mask = df['genres'].apply(genre_exists_in_row)
             df2 = df[mask]
 
             if artists:
@@ -3480,11 +5081,30 @@ class Top50Page():
         # Create buttons for drop down menu
         buttons = []
         for i, label in enumerate(labels):
-            # True False False for 1st False True False for 2nd False False True for 3rd
-            visibility = [i == j for j in range(len(labels))]
-            # 8 Feature Cols + 8 Feature Cols + 1 Bar Chart + 1 Bar Chart
-            visibility = [k for j in [[i]*18 for i in visibility]
-                          for k in j] + [False]*12
+            # Create visibility array based on actual trace structure:
+            # Time period 0: traces 0-17 (8 song + 8 artist + 1 song genres + 1 artist genres)
+            # Time period 1: traces 18-35 (8 song + 8 artist + 1 song genres + 1 artist genres)  
+            # Time period 2: traces 36-53 (8 song + 8 artist + 1 song genres + 1 artist genres)
+            # "All" button: traces 54-65 (12 traces total)
+            visibility = []
+            
+            # For each time period (3 total)
+            for j in range(len(labels)):
+                if j == i:  # Show traces for this time period
+                    # Graph 1: 8 boxplot traces (songs features)
+                    visibility.extend([True] * 8)
+                    # Graph 2: 8 boxplot traces (artists features) 
+                    visibility.extend([True] * 8)
+                    # Graph 3: 1 bar chart trace (song genres)
+                    visibility.extend([True] * 1)
+                    # Graph 4: 1 bar chart trace (artist genres)
+                    visibility.extend([True] * 1)
+                else:  # Hide traces for other time periods
+                    visibility.extend([False] * 18)
+            
+            # Hide the "All" button traces (12 traces)
+            visibility.extend([False] * 12)
+            
             button = dict(
                 method='update',
                 label=label,
@@ -3496,7 +5116,7 @@ class Top50Page():
         allButton = dict(
             method='update',
             label='All',
-            args=[{'visible': [False]*54+[True]*12},
+            args=[{'visible': [False]*54 + [True]*12},
                   {'boxmode': 'group', 'showlegend': True}]
         )
         buttons += [allButton]
@@ -3525,11 +5145,16 @@ class Top50Page():
                           ]
                           )
 
-        # Only show 1st 18 Traces on page-load
+        # Set initial visibility: show first time period (18 traces) and hide the rest
         Ld = len(fig.data)
-        num = 18
-        for k in range(num, Ld):
+        
+        # Hide all traces initially
+        for k in range(Ld):
             fig.update_traces(visible=False, selector=k)
+        
+        # Show first time period traces (0-17)
+        for k in range(18):
+            fig.update_traces(visible=True, selector=k)
 
         # edit axis labels
         fig['layout']['xaxis']['title'] = 'Audio Features'
@@ -3547,25 +5172,31 @@ class Top50Page():
 
 # Analyze Single Artist Page ----------------------------------------------------------------------------------------------
 
-class AnalyzeArtistPage():
+class AnalyzeArtistPage(OptimizedPageBase):
     def __init__(self, artist, all_songs_df, unique_songs_df, global_artist_averages=None):
+        super().__init__(None, all_songs_df, unique_songs_df)
         self._artist = artist
-        self._all_songs_df = pd.DataFrame(all_songs_df)
-        self._unique_songs_df = pd.DataFrame(unique_songs_df)
         self._global_artist_averages = global_artist_averages
 
-        mask = all_songs_df['artist'].apply(lambda x: artist in x.split(', '))
-        self._artist_df = all_songs_df[mask]
-        # self._pure_artist_df = all_songs_df[all_songs_df['artist'] == artist]
+        mask = self._all_songs_df['artist'].apply(lambda x: artist in x.split(', '))
+        self._artist_df = self._all_songs_df[mask]
+        # self._pure_artist_df = self._all_songs_df[self._all_songs_df['artist'] == artist]
 
-        row = unique_songs_df[unique_songs_df['artist'].apply(lambda x: artist in x.split(', '))].iloc[0]
+        row = self._unique_songs_df[self._unique_songs_df['artist'].apply(lambda x: artist in x.split(', '))].iloc[0]
         ind = row['artist'].split(', ').index(artist) if type(row['artists_short_rank']) != int and row['artists_short_rank']!='N/A' else -1
         self._artist_ranks = [row['artists_short_rank'].split(', ')[ind] if ind != -1 else row['artists_short_rank'],
                               row['artists_med_rank'].split(', ')[ind] if ind != -1 else row['artists_med_rank'], 
                               row['artists_long_rank'].split(', ')[ind] if ind != -1 else row['artists_long_rank']]
-        self._artist_genres = row['genres'][ind] if ind != -1 else row['genres'][0]
+        
+        # Safely access genres with bounds checking
+        if ind != -1 and ind < len(row['genres']):
+            self._artist_genres = row['genres'][ind]
+        elif len(row['genres']) > 0:
+            self._artist_genres = row['genres'][0]
+        else:
+            self._artist_genres = ["N/A"]
 
-        self._user_playlists = all_songs_df['playlist'].unique()
+        self._user_playlists = self._all_songs_df['playlist'].unique()
 
     def artist_genres(self):
         return self._artist + ' Genres: ' + ', '.join(self._artist_genres)
@@ -3712,18 +5343,26 @@ class AnalyzeArtistPage():
             # Convert string date to datetime object
             first_date_dt = datetime.datetime.fromisoformat(first_date.replace('Z', '+00:00'))
             first_year = first_date_dt.year
-            first_month = first_date_dt.month
-            first_day = first_date_dt.day
             current_year = datetime.datetime.now().year
             
+            # Get month and day from today's date (current date)
+            today = datetime.datetime.now()
+            today_month = today.month
+            today_day = today.day
+            
             for year in range(first_year, current_year + 1):
-                anniversary_date = datetime.datetime(year, first_month, first_day)
-                fig.add_vline(
-                    x=anniversary_date,
-                    line_width=2,
-                    line_dash="dash",
-                    line_color=YEARLY_VLINE_COLOR
-                )
+                try:
+                    anniversary_date = datetime.datetime(year, today_month, today_day)
+                    
+                    fig.add_vline(
+                        x=anniversary_date,
+                        line_width=3,
+                        line_dash="dash",
+                        line_color="green"
+                    )
+                except ValueError:
+                    # Skip invalid dates (e.g., February 29 in non-leap years)
+                    continue
         
         # Add horizontal lines for average constants when Continuous button is clicked
         # Use global averages from the HomePage calculation
@@ -3903,7 +5542,8 @@ class AnalyzeArtistPage():
                      (df['songs_med_rank'] == 'N/A') & (df['songs_long_rank'] == 'N/A')]
         df = df.drop(drop_df.index)
 
-        df['songs_short_rank'].replace({'N/A': 51}, inplace=True)
+        # Handle 'N/A', 'nan', 'None', and None values before converting to int
+        df['songs_short_rank'].replace({'N/A': 51, 'nan': 51, 'None': 51, None: 51}, inplace=True)
         df['songs_short_rank'] = df['songs_short_rank'].astype(int)
         df = df.sort_values(by='songs_short_rank', ascending=True)
         df['songs_short_rank'].replace({51: 'N/A'}, inplace=True)
@@ -3971,12 +5611,25 @@ class AnalyzeArtistPage():
         percents = defaultdict(list)
         names = defaultdict(dict)
         data = []
-        for g in self._artist_genres:
+        
+        # Flatten artist genres first for consistent processing
+        flat_genre_names = []
+        # self._artist_genres is already a list of strings, not a list of lists
+        if self._artist_genres and len(self._artist_genres) > 0 and self._artist_genres != ["N/A"]:
+            for genre_name in self._artist_genres:
+                if genre_name and genre_name.strip():
+                    flat_genre_names.append(genre_name.strip())
+        else:
+            flat_genre_names.append("N/A")
+        
+        for g in flat_genre_names:
             for p in self._user_playlists:
                 df = self._unique_songs_df[self._unique_songs_df['playlist'].apply(
                     lambda x: p in x)]
+                
+                # Fix the genre matching logic - genres are stored as list of lists
                 mask = df['genres'].apply(
-                    lambda x: g in {z for y in x for z in y})
+                    lambda x: g in {z for y in x for z in y} if isinstance(x, list) else False)
                 percents[p].append(len(df[mask])/len(df)*100)
                 names[g][p] = [str(len(df[mask])) + ' Songs'] + df[mask].sample(min(len(df[mask]),MAX_HOVER_ROWS))['name'].to_list()
 
@@ -3985,13 +5638,22 @@ class AnalyzeArtistPage():
 
         df = pd.DataFrame.from_dict(
             percents, orient='index')
-        df.columns = self._artist_genres + ['sum']
+        
+        df.columns = flat_genre_names + ['sum']
         df = df.sort_values(by='sum', ascending=False).head(10)
 
-        for g in self._artist_genres:
+
+        for i, g in enumerate(flat_genre_names):
             series = pd.Series(
                 dict(zip(df.index, df[g])))
-            go_bar = _h_bar(series, name=g, 
+            # Create a more descriptive trace name to handle single character genres and empty names
+            if not g or g.strip() == "" or g == "N/A":
+                trace_name = f"Unknown Genre {i+1}"
+            elif len(g.strip()) <= 2:
+                trace_name = f"{g.strip()} Genre"
+            else:
+                trace_name = g.strip()
+            go_bar = _h_bar(series, name=trace_name, 
                             hovertext=['<br>'.join(names[g][i]) for i in df.index],
                             percents=True, to_html=False)
             data.append(go_bar)
@@ -4015,7 +5677,14 @@ class AnalyzeArtistsPage():
         for a in artists:
             row = unique_songs_df[unique_songs_df['artist'].apply(lambda x: a in x.split(', '))].iloc[0]
             ind = row['artist'].split(', ').index(a) if type(row['artists_short_rank']) != int and row['artists_short_rank']!='N/A' else -1
-            self._artist_genres.append(row['genres'][ind] if ind != -1 else row['genres'][0])
+            
+            # Safely access genres with bounds checking
+            if ind != -1 and ind < len(row['genres']):
+                self._artist_genres.append(row['genres'][ind])
+            elif len(row['genres']) > 0:
+                self._artist_genres.append(row['genres'][0])
+            else:
+                self._artist_genres.append(["N/A"])
 
     def graph_artist_timelines(self):
         """Create timeline graphs showing when each artist's songs were added to playlists vs Liked Songs"""
@@ -4162,7 +5831,8 @@ class AnalyzeArtistsPage():
                         (df['songs_med_rank'] == 'N/A') & (df['songs_long_rank'] == 'N/A')]
             df = df.drop(drop_df.index)
 
-            df['songs_short_rank'].replace({'N/A': 51}, inplace=True)
+            # Handle 'N/A', 'nan', 'None', and None values before converting to int
+            df['songs_short_rank'].replace({'N/A': 51, 'nan': 51, 'None': 51, None: 51}, inplace=True)
             df['songs_short_rank'] = df['songs_short_rank'].astype(int)
             df = df.sort_values(by='songs_short_rank', ascending=True)
             df['songs_short_rank'].replace({51: 'N/A'}, inplace=True)
@@ -4643,9 +6313,7 @@ class SingleSongPage():
                             if artist_name == self._artist:
                                 continue
                             
-                            # If current artist has non-N/A genres, exclude artists that only share "N/A"
-                            if current_has_non_na_genres and shared_genres == {"N/A"}:
-                                continue
+                            # Include all artists that share any genres, including N/A
                             
                             # This artist shares genres with the current artist
                             if artist_name not in shared_genre_artists:
